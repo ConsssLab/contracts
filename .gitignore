@@ -1,0 +1,34 @@
+# Sui Move
+build/
+Move.lock
+
+# Foundry / EVM
+cache/
+out/
+broadcast/
+
+# Rust / Solana / Anchor
+target/
+.anchor/
+test-ledger/
+*.so
+
+# Node
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# claude code preview harness (local-only)
+.claude/
