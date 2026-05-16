@@ -25,7 +25,9 @@ module chronicle::witness_seal;
 
 use std::string::{Self, String};
 use sui::clock::{Self, Clock};
+use sui::display;
 use sui::event;
+use sui::package;
 use sui::table::{Self, Table};
 
 // ---------- Errors ----------
@@ -41,10 +43,16 @@ const EInvalidRating: u64 = 7;
 // ---------- Constants ----------
 
 const WITNESS_BATTLE_ID: u8 = 3;
-const MAX_TITLE_LEN: u64 = 80;
-const MAX_INSCRIPTION_LEN: u64 = 50;
+// Title / inscription are validated in bytes; CJK characters take 3-4 bytes
+// in UTF-8, so a 50-character (zh-TW) inscription needs ~200 bytes.
+const MAX_TITLE_LEN: u64 = 320;
+const MAX_INSCRIPTION_LEN: u64 = 200;
 const MAX_HERO_ID: u8 = 20;
 const MAX_RATING: u8 = 3;
+
+// ---------- One-time witness for Display ----------
+
+public struct WITNESS_SEAL has drop {}
 
 // ---------- Types ----------
 
@@ -68,7 +76,9 @@ public struct WitnessSeal has key {
     rating: u8,
     mint_order: u64,
     is_first_chronicler: bool,
-    block_height_at_mint: u64,
+    /// Sui consensus timestamp (ms) at mint time. See chronicle.move for why
+    /// this is preferable to "block height" on Sui.
+    mint_timestamp_ms: u64,
     player: address,
 }
 
@@ -83,7 +93,38 @@ public struct WitnessSealMinted has copy, drop {
 
 // ---------- init ----------
 
-fun init(ctx: &mut TxContext) {
+fun init(otw: WITNESS_SEAL, ctx: &mut TxContext) {
+    // Publisher object enables Display registration.
+    let publisher = package::claim(otw, ctx);
+
+    let keys = vector[
+        string::utf8(b"name"),
+        string::utf8(b"description"),
+        string::utf8(b"image_url"),
+        string::utf8(b"project_url"),
+        string::utf8(b"creator"),
+    ];
+    let values = vector[
+        string::utf8(b"Validators' Witness — {title}"),
+        string::utf8(
+            b"Soulbound. Cannot be transferred. Witness to the historic 90.9% validator vote at Crystal Sanctum, the night Suiren refused to fall.",
+        ),
+        string::utf8(b"https://chainoa.consss.io/witness/{id}.png"),
+        string::utf8(b"https://chainoa.consss.io"),
+        string::utf8(b"ConsssLabs"),
+    ];
+
+    let mut display = display::new_with_fields<WitnessSeal>(
+        &publisher,
+        keys,
+        values,
+        ctx,
+    );
+    display::update_version(&mut display);
+
+    transfer::public_transfer(publisher, tx_context::sender(ctx));
+    transfer::public_transfer(display, tx_context::sender(ctx));
+
     let registry = WitnessRegistry {
         id: object::new(ctx),
         minted: table::new<address, bool>(ctx),
@@ -139,7 +180,7 @@ public entry fun mint_witness(
         rating,
         mint_order: next_order,
         is_first_chronicler: next_order == 1,
-        block_height_at_mint: clock::timestamp_ms(clock),
+        mint_timestamp_ms: clock::timestamp_ms(clock),
         player,
     };
 
@@ -167,7 +208,7 @@ public fun inscription(s: &WitnessSeal): &String { &s.inscription }
 public fun rating(s: &WitnessSeal): u8 { s.rating }
 public fun mint_order(s: &WitnessSeal): u64 { s.mint_order }
 public fun is_first_chronicler(s: &WitnessSeal): bool { s.is_first_chronicler }
-public fun block_height_at_mint(s: &WitnessSeal): u64 { s.block_height_at_mint }
+public fun mint_timestamp_ms(s: &WitnessSeal): u64 { s.mint_timestamp_ms }
 public fun player(s: &WitnessSeal): address { s.player }
 
 public fun has_minted(registry: &WitnessRegistry, who: address): bool {

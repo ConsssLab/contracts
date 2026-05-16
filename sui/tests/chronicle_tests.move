@@ -80,8 +80,8 @@ fun mint_increments_per_battle_counter() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::ETitleTooLong)]
-fun rejects_title_over_80_chars() {
+#[expected_failure(abort_code = chronicle::ETitleTooLong)]
+fun rejects_title_over_max_bytes() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));
     ts::next_tx(&mut sc, PLAYER_A);
@@ -89,10 +89,10 @@ fun rejects_title_over_80_chars() {
     let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
-    // 81 'x' characters.
+    // MAX_TITLE_LEN is 320; 321 'x' bytes should trip the assert.
     let mut bad = vector::empty<u8>();
     let mut i = 0;
-    while (i < 81) {
+    while (i < 321) {
         vector::push_back(&mut bad, 120u8);
         i = i + 1;
     };
@@ -114,8 +114,8 @@ fun rejects_title_over_80_chars() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::EInscriptionTooLong)]
-fun rejects_inscription_over_50_chars() {
+#[expected_failure(abort_code = chronicle::EInscriptionTooLong)]
+fun rejects_inscription_over_max_bytes() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));
     ts::next_tx(&mut sc, PLAYER_A);
@@ -123,9 +123,10 @@ fun rejects_inscription_over_50_chars() {
     let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
+    // MAX_INSCRIPTION_LEN is 200; 201 'y' bytes should trip the assert.
     let mut bad = vector::empty<u8>();
     let mut i = 0;
-    while (i < 51) {
+    while (i < 201) {
         vector::push_back(&mut bad, 121u8);
         i = i + 1;
     };
@@ -147,7 +148,7 @@ fun rejects_inscription_over_50_chars() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::ETitleEmpty)]
+#[expected_failure(abort_code = chronicle::ETitleEmpty)]
 fun rejects_empty_title() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));
@@ -173,7 +174,7 @@ fun rejects_empty_title() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::EInvalidBattleId)]
+#[expected_failure(abort_code = chronicle::EInvalidBattleId)]
 fun rejects_battle_id_zero() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));
@@ -199,7 +200,7 @@ fun rejects_battle_id_zero() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::EInvalidHeroId)]
+#[expected_failure(abort_code = chronicle::EInvalidHeroId)]
 fun rejects_hero_id_zero() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));
@@ -225,7 +226,7 @@ fun rejects_hero_id_zero() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::chronicle::EInvalidRating)]
+#[expected_failure(abort_code = chronicle::EInvalidRating)]
 fun rejects_rating_above_3() {
     let mut sc = ts::begin(PLAYER_A);
     chronicle::init_for_testing(ts::ctx(&mut sc));

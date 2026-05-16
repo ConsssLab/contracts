@@ -46,7 +46,7 @@ fun mint_witness_happy_path() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::witness_seal::EAlreadyMinted)]
+#[expected_failure(abort_code = witness_seal::EAlreadyMinted)]
 fun rejects_double_mint_by_same_player() {
     let mut sc = ts::begin(PLAYER_A);
     witness_seal::init_for_testing(ts::ctx(&mut sc));
@@ -84,7 +84,7 @@ fun rejects_double_mint_by_same_player() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::witness_seal::EInvalidBattle)]
+#[expected_failure(abort_code = witness_seal::EInvalidBattle)]
 fun rejects_non_battle_3_mint() {
     let mut sc = ts::begin(PLAYER_A);
     witness_seal::init_for_testing(ts::ctx(&mut sc));
@@ -110,8 +110,8 @@ fun rejects_non_battle_3_mint() {
 }
 
 #[test]
-#[expected_failure(abort_code = chronicle::witness_seal::ETitleTooLong)]
-fun rejects_witness_title_over_80() {
+#[expected_failure(abort_code = witness_seal::ETitleTooLong)]
+fun rejects_witness_title_over_max_bytes() {
     let mut sc = ts::begin(PLAYER_A);
     witness_seal::init_for_testing(ts::ctx(&mut sc));
 
@@ -119,9 +119,10 @@ fun rejects_witness_title_over_80() {
     let mut reg = ts::take_shared<WitnessRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
+    // MAX_TITLE_LEN is 320; 321 'x' bytes should trip the assert.
     let mut bad = vector::empty<u8>();
     let mut i = 0;
-    while (i < 81) {
+    while (i < 321) {
         vector::push_back(&mut bad, 120u8);
         i = i + 1;
     };

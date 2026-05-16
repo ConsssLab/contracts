@@ -30,8 +30,10 @@ const ETitleEmpty: u64 = 6;
 
 // ---------- Constants ----------
 
-const MAX_TITLE_LEN: u64 = 80;
-const MAX_INSCRIPTION_LEN: u64 = 50;
+// Title / inscription are validated in bytes; CJK characters take 3-4 bytes
+// in UTF-8, so a 50-character (zh-TW) inscription needs ~200 bytes.
+const MAX_TITLE_LEN: u64 = 320;
+const MAX_INSCRIPTION_LEN: u64 = 200;
 // MVP ships 3 battles; future chapters can bump this constant.
 const MAX_BATTLE_ID: u8 = 3;
 // Hero IDs roughly follow the Suiren roster: 1=Lyric, 2=Tidea, 3=Swift,
@@ -63,7 +65,10 @@ public struct Chronicle has key, store {
     rating: u8,
     mint_order: u64,
     is_first_chronicler: bool,
-    block_height_at_mint: u64,
+    /// Sui consensus timestamp (ms) at mint time. Sui has no EVM-style "block
+    /// height"; the closest immutability anchors are this timestamp + the
+    /// transaction digest of the mint tx.
+    mint_timestamp_ms: u64,
     player: address,
 }
 
@@ -163,7 +168,7 @@ public entry fun mint_chronicle(
         rating,
         mint_order: next_order,
         is_first_chronicler: next_order == 1,
-        block_height_at_mint: clock::timestamp_ms(clock),
+        mint_timestamp_ms: clock::timestamp_ms(clock),
         player,
     };
 
@@ -189,7 +194,7 @@ public fun inscription(c: &Chronicle): &String { &c.inscription }
 public fun rating(c: &Chronicle): u8 { c.rating }
 public fun mint_order(c: &Chronicle): u64 { c.mint_order }
 public fun is_first_chronicler(c: &Chronicle): bool { c.is_first_chronicler }
-public fun block_height_at_mint(c: &Chronicle): u64 { c.block_height_at_mint }
+public fun mint_timestamp_ms(c: &Chronicle): u64 { c.mint_timestamp_ms }
 public fun player(c: &Chronicle): address { c.player }
 
 public fun count_for_battle(registry: &ChronicleRegistry, battle_id: u8): u64 {
