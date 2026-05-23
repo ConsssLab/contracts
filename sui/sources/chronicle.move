@@ -7,6 +7,11 @@
 // flagged with `is_first_chronicler = true` and rendered with a special
 // border in-game.
 //
+// The full chronicle payload (battle log, hero pose, screenshot, full text) is
+// stored on Walrus; `metadata_blob_id` anchors the on-chain NFT to its Walrus
+// blob. The on-chain `inscription` is a short epitaph (≤ 200 bytes) suitable
+// for Sui Display; the Walrus blob carries the long-form content.
+//
 // This NFT is freely transferable (key + store). For the soulbound
 // Validators' Witness see `chronicle::witness_seal`.
 
@@ -27,6 +32,8 @@ const EInvalidBattleId: u64 = 3;
 const EInvalidHeroId: u64 = 4;
 const EInvalidRating: u64 = 5;
 const ETitleEmpty: u64 = 6;
+const EBlobIdEmpty: u64 = 7;
+const EBlobIdTooLong: u64 = 8;
 
 // ---------- Constants ----------
 
@@ -41,6 +48,10 @@ const MAX_BATTLE_ID: u8 = 3;
 const MAX_HERO_ID: u8 = 20;
 // Rating: 0=Decisive, 1=Victory, 2=Narrow, 3=Pyrrhic.
 const MAX_RATING: u8 = 3;
+// Walrus blob IDs are 32-byte SHA-256 derived identifiers, returned by
+// `@mysten/walrus` as a base64url string (~44 chars). 128 leaves room for
+// any future encoding (hex, URI) without forcing a contract migration.
+const MAX_BLOB_ID_LEN: u64 = 128;
 
 // ---------- One-time witness for Display ----------
 
@@ -69,6 +80,10 @@ public struct Chronicle has key, store {
     /// height"; the closest immutability anchors are this timestamp + the
     /// transaction digest of the mint tx.
     mint_timestamp_ms: u64,
+    /// Walrus blob ID for the off-chain chronicle payload (long-form text,
+    /// hero pose, battle log JSON, optional screenshot). Resolvable via the
+    /// Walrus aggregator HTTP API: `GET /v1/blobs/{metadata_blob_id}`.
+    metadata_blob_id: String,
     player: address,
 }
 
@@ -94,6 +109,8 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         string::utf8(b"image_url"),
         string::utf8(b"project_url"),
         string::utf8(b"creator"),
+        string::utf8(b"walrus_blob_id"),
+        string::utf8(b"walrus_url"),
     ];
     let values = vector[
         string::utf8(b"{title}"),
@@ -103,6 +120,8 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         string::utf8(b"https://chainoa.consss.io/chronicle/{id}.png"),
         string::utf8(b"https://chainoa.consss.io"),
         string::utf8(b"ConsssLabs"),
+        string::utf8(b"{metadata_blob_id}"),
+        string::utf8(b"https://aggregator.walrus-testnet.walrus.space/v1/blobs/{metadata_blob_id}"),
     ];
 
     let mut display = display::new_with_fields<Chronicle>(
@@ -128,6 +147,10 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
 
 /// Mint a Chronicle NFT for the calling player. Validates field lengths,
 /// increments the per-battle counter, and emits ChronicleMinted.
+///
+/// `metadata_blob_id` must be the Walrus blob ID returned by uploading the
+/// full chronicle payload (long-form text, hero pose, battle log JSON,
+/// optional screenshot) to Walrus prior to calling this entry.
 public entry fun mint_chronicle(
     registry: &mut ChronicleRegistry,
     battle_id: u8,
@@ -135,6 +158,7 @@ public entry fun mint_chronicle(
     title: vector<u8>,
     inscription: vector<u8>,
     rating: u8,
+    metadata_blob_id: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
@@ -147,6 +171,10 @@ public entry fun mint_chronicle(
     assert!(title_len > 0, ETitleEmpty);
     assert!(title_len <= MAX_TITLE_LEN, ETitleTooLong);
     assert!(vector::length(&inscription) <= MAX_INSCRIPTION_LEN, EInscriptionTooLong);
+
+    let blob_id_len = vector::length(&metadata_blob_id);
+    assert!(blob_id_len > 0, EBlobIdEmpty);
+    assert!(blob_id_len <= MAX_BLOB_ID_LEN, EBlobIdTooLong);
 
     // ---- bump counter ----
     let next_order = if (table::contains(&registry.counts, battle_id)) {
@@ -169,6 +197,7 @@ public entry fun mint_chronicle(
         mint_order: next_order,
         is_first_chronicler: next_order == 1,
         mint_timestamp_ms: clock::timestamp_ms(clock),
+        metadata_blob_id: string::utf8(metadata_blob_id),
         player,
     };
 
@@ -195,6 +224,7 @@ public fun rating(c: &Chronicle): u8 { c.rating }
 public fun mint_order(c: &Chronicle): u64 { c.mint_order }
 public fun is_first_chronicler(c: &Chronicle): bool { c.is_first_chronicler }
 public fun mint_timestamp_ms(c: &Chronicle): u64 { c.mint_timestamp_ms }
+public fun metadata_blob_id(c: &Chronicle): &String { &c.metadata_blob_id }
 public fun player(c: &Chronicle): address { c.player }
 
 public fun count_for_battle(registry: &ChronicleRegistry, battle_id: u8): u64 {

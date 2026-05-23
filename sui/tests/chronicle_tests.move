@@ -24,6 +24,7 @@ fun mint_increments_per_battle_counter() {
         b"The Battle of Lumen Harbor",
         b"Speak with your blade, not your numbers.",
         0,
+        b"BqYg7Xk2pAa8r7LQ_walrus_blob_id_battle1",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -36,6 +37,11 @@ fun mint_increments_per_battle_counter() {
     assert!(chronicle::mint_order(&nft) == 1, 103);
     assert!(chronicle::is_first_chronicler(&nft), 104);
     assert!(chronicle::player(&nft) == PLAYER_A, 105);
+    assert!(
+        std::string::as_bytes(chronicle::metadata_blob_id(&nft))
+            == b"BqYg7Xk2pAa8r7LQ_walrus_blob_id_battle1",
+        106,
+    );
     ts::return_to_sender(&sc, nft);
 
     // Second mint by PLAYER_B for the same battle => order = 2, not first.
@@ -47,6 +53,7 @@ fun mint_increments_per_battle_counter() {
         b"80 Against 200",
         b"We held the line.",
         1,
+        b"Cz1q9_walrus_blob_id_battle1_b",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -66,6 +73,7 @@ fun mint_increments_per_battle_counter() {
         b"Sea of Consensus",
         b"The waves remember.",
         2,
+        b"Dx2w0_walrus_blob_id_battle2",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -104,6 +112,7 @@ fun rejects_title_over_max_bytes() {
         bad,
         b"ok",
         0,
+        b"blob_id_x",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -138,6 +147,7 @@ fun rejects_inscription_over_max_bytes() {
         b"Title",
         bad,
         0,
+        b"blob_id_x",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -164,6 +174,7 @@ fun rejects_empty_title() {
         b"",
         b"ok",
         0,
+        b"blob_id_x",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -190,6 +201,7 @@ fun rejects_battle_id_zero() {
         b"Title",
         b"ok",
         0,
+        b"blob_id_x",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -216,6 +228,7 @@ fun rejects_hero_id_zero() {
         b"Title",
         b"ok",
         0,
+        b"blob_id_x",
         &clk,
         ts::ctx(&mut sc),
     );
@@ -242,6 +255,69 @@ fun rejects_rating_above_3() {
         b"Title",
         b"ok",
         4,
+        b"blob_id_x",
+        &clk,
+        ts::ctx(&mut sc),
+    );
+
+    clock::destroy_for_testing(clk);
+    ts::return_shared(reg);
+    ts::end(sc);
+}
+
+#[test]
+#[expected_failure(abort_code = chronicle::EBlobIdEmpty)]
+fun rejects_empty_blob_id() {
+    let mut sc = ts::begin(PLAYER_A);
+    chronicle::init_for_testing(ts::ctx(&mut sc));
+    ts::next_tx(&mut sc, PLAYER_A);
+
+    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
+    let clk = clock::create_for_testing(ts::ctx(&mut sc));
+
+    chronicle::mint_chronicle(
+        &mut reg,
+        1,
+        1,
+        b"Title",
+        b"ok",
+        0,
+        b"",
+        &clk,
+        ts::ctx(&mut sc),
+    );
+
+    clock::destroy_for_testing(clk);
+    ts::return_shared(reg);
+    ts::end(sc);
+}
+
+#[test]
+#[expected_failure(abort_code = chronicle::EBlobIdTooLong)]
+fun rejects_blob_id_over_max_bytes() {
+    let mut sc = ts::begin(PLAYER_A);
+    chronicle::init_for_testing(ts::ctx(&mut sc));
+    ts::next_tx(&mut sc, PLAYER_A);
+
+    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
+    let clk = clock::create_for_testing(ts::ctx(&mut sc));
+
+    // MAX_BLOB_ID_LEN is 128; 129 'z' bytes trips the assert.
+    let mut bad = vector::empty<u8>();
+    let mut i = 0;
+    while (i < 129) {
+        vector::push_back(&mut bad, 122u8);
+        i = i + 1;
+    };
+
+    chronicle::mint_chronicle(
+        &mut reg,
+        1,
+        1,
+        b"Title",
+        b"ok",
+        0,
+        bad,
         &clk,
         ts::ctx(&mut sc),
     );
