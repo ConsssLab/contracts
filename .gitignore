@@ -25,10 +25,39 @@ yarn-error.log
 *.swp
 *.swo
 
-# Local secrets
+# Local secrets — .env files
 .env
 .env.*
 !.env.example
 
+# Wallet / keypair files (Solana, Foundry, Sui, generic)
+# Repo is public — any local-exported key here would be game over.
+id.json
+keypair.json
+*.keypair
+*.keystore
+*.key
+*.pem
+keypairs/
+wallets/
+sui.keystore
+*.alias
+
+# Test / coverage / gas reports (may leak local RPC URLs in headers)
+coverage/
+coverage.json
+lcov.info
+gas-report*.txt
+
 # claude code preview harness (local-only)
 .claude/
+
+# Local recovery snapshots
+.backup/
+
+# Generic transient
+*.tmp
+*.bak
+~$*
+Thumbs.db
+Desktop.ini
