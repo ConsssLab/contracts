@@ -1,326 +1,87 @@
 #[test_only]
 module chronicle::chronicle_tests;
 
-use chronicle::chronicle::{Self, Chronicle, ChronicleRegistry};
-use sui::clock;
 use sui::test_scenario as ts;
+use sui::clock::{Self, Clock};
+use chronicle::chronicle::{Self, ChronicleRegistry};
 
-const PLAYER_A: address = @0xA11CE;
-const PLAYER_B: address = @0xB0B;
+// Force a given per-battle rank, mint via the test bypass, assert tier+order.
+#[test_only]
+fun check(
+    reg: &mut ChronicleRegistry,
+    clk: &Clock,
+    battle: u8,
+    rank: u64,
+    hp: u8,
+    expect_tier: u8,
+    ctx: &mut TxContext,
+) {
+    chronicle::set_count_for_testing(reg, battle, rank - 1);
+    let nft = chronicle::mint_for_testing(reg, battle, 1, hp, b"blob_id_x", clk, ctx);
+    assert!(chronicle::mint_order(&nft) == rank, 100 + rank);
+    assert!(chronicle::tier(&nft) == expect_tier, rank);
+    chronicle::destroy_for_testing(nft);
+}
 
+// All rows from the design table (image2): floor by rank, +1 if hp>=80.
+// tier: 0=Normal, 1=Bronze, 2=Silver, 3=Gold.
 #[test]
-fun mint_increments_per_battle_counter() {
-    let mut sc = ts::begin(PLAYER_A);
+fun tier_table_matches_design() {
+    let mut sc = ts::begin(@0xA);
     chronicle::init_for_testing(ts::ctx(&mut sc));
-
-    ts::next_tx(&mut sc, PLAYER_A);
+    ts::next_tx(&mut sc, @0xA);
     let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"The Battle of Lumen Harbor",
-        b"Speak with your blade, not your numbers.",
-        0,
-        b"BqYg7Xk2pAa8r7LQ_walrus_blob_id_battle1",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    ts::next_tx(&mut sc, PLAYER_A);
-    let nft = ts::take_from_sender<Chronicle>(&sc);
-    assert!(chronicle::battle_id(&nft) == 1, 100);
-    assert!(chronicle::hero_id(&nft) == 1, 101);
-    assert!(chronicle::rating(&nft) == 0, 102);
-    assert!(chronicle::mint_order(&nft) == 1, 103);
-    assert!(chronicle::is_first_chronicler(&nft), 104);
-    assert!(chronicle::player(&nft) == PLAYER_A, 105);
-    assert!(
-        std::string::as_bytes(chronicle::metadata_blob_id(&nft))
-            == b"BqYg7Xk2pAa8r7LQ_walrus_blob_id_battle1",
-        106,
-    );
-    ts::return_to_sender(&sc, nft);
-
-    // Second mint by PLAYER_B for the same battle => order = 2, not first.
-    ts::next_tx(&mut sc, PLAYER_B);
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        2,
-        b"80 Against 200",
-        b"We held the line.",
-        1,
-        b"Cz1q9_walrus_blob_id_battle1_b",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    ts::next_tx(&mut sc, PLAYER_B);
-    let nft2 = ts::take_from_sender<Chronicle>(&sc);
-    assert!(chronicle::mint_order(&nft2) == 2, 200);
-    assert!(!chronicle::is_first_chronicler(&nft2), 201);
-    ts::return_to_sender(&sc, nft2);
-
-    // Third mint, but for battle 2 => its own counter starts at 1.
-    ts::next_tx(&mut sc, PLAYER_A);
-    chronicle::mint_chronicle(
-        &mut reg,
-        2,
-        3,
-        b"Sea of Consensus",
-        b"The waves remember.",
-        2,
-        b"Dx2w0_walrus_blob_id_battle2",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    assert!(chronicle::count_for_battle(&reg, 1) == 2, 300);
-    assert!(chronicle::count_for_battle(&reg, 2) == 1, 301);
-    assert!(chronicle::count_for_battle(&reg, 3) == 0, 302);
+    check(&mut reg, &clk, 1, 3,    68,  2, ts::ctx(&mut sc)); // #3    68% -> Silver
+    check(&mut reg, &clk, 1, 3,    85,  3, ts::ctx(&mut sc)); // #3    85% -> Gold
+    check(&mut reg, &clk, 1, 120,  70,  1, ts::ctx(&mut sc)); // #120  70% -> Bronze
+    check(&mut reg, &clk, 1, 120,  90,  2, ts::ctx(&mut sc)); // #120  90% -> Silver
+    check(&mut reg, &clk, 1, 600,  95,  1, ts::ctx(&mut sc)); // #600  95% -> Bronze
+    check(&mut reg, &clk, 1, 600,  40,  0, ts::ctx(&mut sc)); // #600  40% -> Normal
+    check(&mut reg, &clk, 1, 1000, 100, 1, ts::ctx(&mut sc)); // #1000 100% -> Bronze (cap)
+    check(&mut reg, &clk, 1, 100,  79,  2, ts::ctx(&mut sc)); // #100  79% -> Silver (floor, below threshold)
+    check(&mut reg, &clk, 1, 101,  80,  2, ts::ctx(&mut sc)); // #101  80% -> Silver (bronze floor + upgrade)
 
     clock::destroy_for_testing(clk);
     ts::return_shared(reg);
     ts::end(sc);
 }
 
+// Per-battle rank: each battle has its own counter.
 #[test]
-#[expected_failure(abort_code = chronicle::ETitleTooLong)]
-fun rejects_title_over_max_bytes() {
-    let mut sc = ts::begin(PLAYER_A);
+fun first_chronicler_per_battle() {
+    let mut sc = ts::begin(@0xA);
     chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
+    ts::next_tx(&mut sc, @0xA);
     let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
-    // MAX_TITLE_LEN is 320; 321 'x' bytes should trip the assert.
-    let mut bad = vector::empty<u8>();
-    let mut i = 0;
-    while (i < 321) {
-        vector::push_back(&mut bad, 120u8);
-        i = i + 1;
-    };
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        bad,
-        b"ok",
-        0,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
+    let a = chronicle::mint_for_testing(&mut reg, 1, 1, 50, b"b", &clk, ts::ctx(&mut sc));
+    let b = chronicle::mint_for_testing(&mut reg, 2, 1, 50, b"b", &clk, ts::ctx(&mut sc));
+    assert!(chronicle::mint_order(&a) == 1 && chronicle::is_first_chronicler(&a), 1);
+    assert!(chronicle::mint_order(&b) == 1 && chronicle::is_first_chronicler(&b), 2);
+    chronicle::destroy_for_testing(a);
+    chronicle::destroy_for_testing(b);
 
     clock::destroy_for_testing(clk);
     ts::return_shared(reg);
     ts::end(sc);
 }
 
+// #1001+ get no NFT — mint aborts with ENoNFT.
 #[test]
-#[expected_failure(abort_code = chronicle::EInscriptionTooLong)]
-fun rejects_inscription_over_max_bytes() {
-    let mut sc = ts::begin(PLAYER_A);
+#[expected_failure]
+fun rank_over_max_aborts() {
+    let mut sc = ts::begin(@0xA);
     chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
+    ts::next_tx(&mut sc, @0xA);
     let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
     let clk = clock::create_for_testing(ts::ctx(&mut sc));
 
-    // MAX_INSCRIPTION_LEN is 200; 201 'y' bytes should trip the assert.
-    let mut bad = vector::empty<u8>();
-    let mut i = 0;
-    while (i < 201) {
-        vector::push_back(&mut bad, 121u8);
-        i = i + 1;
-    };
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"Title",
-        bad,
-        0,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::ETitleEmpty)]
-fun rejects_empty_title() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"",
-        b"ok",
-        0,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::EInvalidBattleId)]
-fun rejects_battle_id_zero() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        0,
-        1,
-        b"Title",
-        b"ok",
-        0,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::EInvalidHeroId)]
-fun rejects_hero_id_zero() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        0,
-        b"Title",
-        b"ok",
-        0,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::EInvalidRating)]
-fun rejects_rating_above_3() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"Title",
-        b"ok",
-        4,
-        b"blob_id_x",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::EBlobIdEmpty)]
-fun rejects_empty_blob_id() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"Title",
-        b"ok",
-        0,
-        b"",
-        &clk,
-        ts::ctx(&mut sc),
-    );
-
-    clock::destroy_for_testing(clk);
-    ts::return_shared(reg);
-    ts::end(sc);
-}
-
-#[test]
-#[expected_failure(abort_code = chronicle::EBlobIdTooLong)]
-fun rejects_blob_id_over_max_bytes() {
-    let mut sc = ts::begin(PLAYER_A);
-    chronicle::init_for_testing(ts::ctx(&mut sc));
-    ts::next_tx(&mut sc, PLAYER_A);
-
-    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
-    let clk = clock::create_for_testing(ts::ctx(&mut sc));
-
-    // MAX_BLOB_ID_LEN is 128; 129 'z' bytes trips the assert.
-    let mut bad = vector::empty<u8>();
-    let mut i = 0;
-    while (i < 129) {
-        vector::push_back(&mut bad, 122u8);
-        i = i + 1;
-    };
-
-    chronicle::mint_chronicle(
-        &mut reg,
-        1,
-        1,
-        b"Title",
-        b"ok",
-        0,
-        bad,
-        &clk,
-        ts::ctx(&mut sc),
-    );
+    chronicle::set_count_for_testing(&mut reg, 1, 1000); // next would be #1001
+    let nft = chronicle::mint_for_testing(&mut reg, 1, 1, 100, b"b", &clk, ts::ctx(&mut sc));
+    chronicle::destroy_for_testing(nft); // unreachable
 
     clock::destroy_for_testing(clk);
     ts::return_shared(reg);

@@ -1,25 +1,39 @@
 // Module: chronicle::chronicle
 //
-// Transferable Chronicle NFT minted by a player after completing a battle.
-// Each mint increments a per-battle counter held in the shared ChronicleRegistry,
-// so every NFT carries its position in the global ranking ("you are the Nth
-// chronicler of this battle"). The first chronicler of a given battle is
-// flagged with `is_first_chronicler = true` and rendered with a special
-// border in-game.
+// Transferable Chronicle NFT minted by a player after clearing a battle.
 //
-// The full chronicle payload (battle log, hero pose, screenshot, full text) is
-// stored on Walrus; `metadata_blob_id` anchors the on-chain NFT to its Walrus
-// blob. The on-chain `inscription` is a short epitaph (≤ 200 bytes) suitable
-// for Sui Display; the Walrus blob carries the long-form content.
+// ANTI-CHEAT (voucher) — the mint is NOT open. A player cannot mint by crafting
+// a PTB directly: `mint_chronicle` requires an ed25519 *voucher* signed by the
+// game's authority key (held server-side, off-chain). The voucher attests the
+// player's remaining-HP%, which the client cannot forge. Replay is blocked by a
+// one-time `nonce`; stale vouchers by `expiry_ms` vs the on-chain clock.
 //
-// This NFT is freely transferable (key + store). For the soulbound
-// Validators' Witness see `chronicle::witness_seal`.
+//   Voucher message = BCS bytes, in this exact order (backend must match):
+//     player:address(32) ++ battle_id:u8 ++ hero_id:u8 ++ hp_pct:u8
+//       ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+//   signed by the authority ed25519 secret key; the public key is stored in
+//   ChronicleRegistry.authority_pubkey (set/rotated via AdminCap).
+//
+// TIER (gold/silver/bronze/normal) — ONE NFT type, four visuals via Display.
+// "Floor by mint rank, upgrade by HP" (per-battle rank from the registry):
+//     rank 1..100   -> Silver floor    | +1 tier if hp% >= 80  => max Gold
+//     rank 101..300 -> Bronze floor    | +1 tier if hp% >= 80  => max Silver
+//     rank 301..1000-> Normal floor    | +1 tier if hp% >= 80  => max Bronze
+//     rank 1001+    -> NO NFT (mint aborts)
+//   tier: 0=Normal, 1=Bronze, 2=Silver, 3=Gold. Display image_url is templated
+//   by {battle_id} and {tier}, so each NFT renders its tier's art.
+//
+// The full chronicle payload (battle log, hero pose, screenshot, long text) is
+// on Walrus; `metadata_blob_id` anchors the NFT to its blob. Freely transferable
+// (key + store). For the soulbound Battle-3 seal see `chronicle::witness_seal`.
 
 module chronicle::chronicle;
 
 use std::string::{Self, String};
+use std::bcs;
 use sui::clock::{Self, Clock};
 use sui::display;
+use sui::ed25519;
 use sui::event;
 use sui::package;
 use sui::table::{Self, Table};
@@ -30,28 +44,35 @@ const ETitleTooLong: u64 = 1;
 const EInscriptionTooLong: u64 = 2;
 const EInvalidBattleId: u64 = 3;
 const EInvalidHeroId: u64 = 4;
-const EInvalidRating: u64 = 5;
 const ETitleEmpty: u64 = 6;
 const EBlobIdEmpty: u64 = 7;
 const EBlobIdTooLong: u64 = 8;
+const EInvalidHp: u64 = 9;
+const EAuthorityNotSet: u64 = 10;
+const EVoucherExpired: u64 = 11;
+const ENonceUsed: u64 = 12;
+const EBadSignature: u64 = 13;
+const ENoNFT: u64 = 14;
+const EBadPubkey: u64 = 15;
 
 // ---------- Constants ----------
 
-// Title / inscription are validated in bytes; CJK characters take 3-4 bytes
-// in UTF-8, so a 50-character (zh-TW) inscription needs ~200 bytes.
 const MAX_TITLE_LEN: u64 = 320;
 const MAX_INSCRIPTION_LEN: u64 = 200;
-// MVP ships 3 battles; future chapters can bump this constant.
 const MAX_BATTLE_ID: u8 = 3;
-// Hero IDs roughly follow the Suiren roster: 1=Lyric, 2=Tidea, 3=Swift,
-// 4=Aedric, 5=Cypher. Reserve 1..=20 for future chapters.
 const MAX_HERO_ID: u8 = 20;
-// Rating: 0=Decisive, 1=Victory, 2=Narrow, 3=Pyrrhic.
-const MAX_RATING: u8 = 3;
-// Walrus blob IDs are 32-byte SHA-256 derived identifiers, returned by
-// `@mysten/walrus` as a base64url string (~44 chars). 128 leaves room for
-// any future encoding (hex, URI) without forcing a contract migration.
 const MAX_BLOB_ID_LEN: u64 = 128;
+
+// Tier ranking (per-battle mint rank).
+const RANK_SILVER_FLOOR: u64 = 100;   // 1..100   -> Silver floor
+const RANK_BRONZE_FLOOR: u64 = 300;   // 101..300 -> Bronze floor
+const RANK_MAX: u64 = 1000;           // 301..1000-> Normal floor; 1001+ -> no NFT
+const HP_UPGRADE_THRESHOLD: u8 = 80;  // hp% >= 80 upgrades one tier
+
+// Tier values.
+const TIER_NORMAL: u8 = 0;
+const TIER_BRONZE: u8 = 1;
+const TIER_SILVER: u8 = 2;
 
 // ---------- One-time witness for Display ----------
 
@@ -59,11 +80,21 @@ public struct CHRONICLE has drop {}
 
 // ---------- Types ----------
 
-/// Shared registry tracking per-battle mint order.
+/// Admin capability: set/rotate the voucher authority public key.
+public struct AdminCap has key, store {
+    id: UID,
+}
+
+/// Shared registry: per-battle mint order + voucher authority + used nonces.
 public struct ChronicleRegistry has key {
     id: UID,
     /// battle_id -> count of chronicles minted for that battle so far.
     counts: Table<u8, u64>,
+    /// ed25519 public key (32 bytes) of the off-chain voucher signer. Empty
+    /// until set via `set_authority_pubkey`; mint aborts while empty.
+    authority_pubkey: vector<u8>,
+    /// Spent voucher nonces (replay protection).
+    used_nonces: Table<u64, bool>,
 }
 
 /// Transferable Chronicle NFT.
@@ -73,16 +104,13 @@ public struct Chronicle has key, store {
     hero_id: u8,
     title: String,
     inscription: String,
-    rating: u8,
+    /// Remaining HP% at clear (0..100), attested by the voucher.
+    hp_pct: u8,
+    /// 0=Normal, 1=Bronze, 2=Silver, 3=Gold. Derived from rank + hp_pct.
+    tier: u8,
     mint_order: u64,
     is_first_chronicler: bool,
-    /// Sui consensus timestamp (ms) at mint time. Sui has no EVM-style "block
-    /// height"; the closest immutability anchors are this timestamp + the
-    /// transaction digest of the mint tx.
     mint_timestamp_ms: u64,
-    /// Walrus blob ID for the off-chain chronicle payload (long-form text,
-    /// hero pose, battle log JSON, optional screenshot). Resolvable via the
-    /// Walrus aggregator HTTP API: `GET /v1/blobs/{metadata_blob_id}`.
     metadata_blob_id: String,
     player: address,
 }
@@ -94,21 +122,25 @@ public struct ChronicleMinted has copy, drop {
     player: address,
     battle_id: u8,
     mint_order: u64,
+    tier: u8,
     is_first: bool,
 }
 
 // ---------- init ----------
 
 fun init(otw: CHRONICLE, ctx: &mut TxContext) {
-    // Publisher object enables Display registration.
     let publisher = package::claim(otw, ctx);
 
+    // image_url is templated by {battle_id} AND {tier} so every battle×tier
+    // renders its own artwork from a single NFT type. Host on a CORS-friendly
+    // HTTPS path (GitHub Pages here; can move to conssswars.com later).
     let keys = vector[
         string::utf8(b"name"),
         string::utf8(b"description"),
         string::utf8(b"image_url"),
         string::utf8(b"project_url"),
         string::utf8(b"creator"),
+        string::utf8(b"tier"),
         string::utf8(b"walrus_blob_id"),
         string::utf8(b"walrus_url"),
     ];
@@ -117,55 +149,67 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         string::utf8(
             b"A Chronicle of the Chainoa Eternal Chronicles. Battle {battle_id}, written by chronicler #{mint_order}.",
         ),
-        string::utf8(b"https://chainoa.consss.io/chronicle/{id}.png"),
-        string::utf8(b"https://chainoa.consss.io"),
+        string::utf8(b"https://conssslabs.github.io/public-assets/chronicle/battle-{battle_id}-{tier}.png"),
+        string::utf8(b"https://conssswars.com"),
         string::utf8(b"ConsssLabs"),
+        string::utf8(b"{tier}"),
         string::utf8(b"{metadata_blob_id}"),
         string::utf8(b"https://aggregator.walrus-testnet.walrus.space/v1/blobs/{metadata_blob_id}"),
     ];
 
-    let mut display = display::new_with_fields<Chronicle>(
-        &publisher,
-        keys,
-        values,
-        ctx,
-    );
+    let mut display = display::new_with_fields<Chronicle>(&publisher, keys, values, ctx);
     display::update_version(&mut display);
 
     transfer::public_transfer(publisher, tx_context::sender(ctx));
     transfer::public_transfer(display, tx_context::sender(ctx));
 
-    // Create and share the registry so any player can mint via it.
-    let registry = ChronicleRegistry {
+    // AdminCap to the deployer.
+    transfer::public_transfer(AdminCap { id: object::new(ctx) }, tx_context::sender(ctx));
+
+    // Share the registry (authority key set post-deploy via set_authority_pubkey).
+    transfer::share_object(ChronicleRegistry {
         id: object::new(ctx),
         counts: table::new<u8, u64>(ctx),
-    };
-    transfer::share_object(registry);
+        authority_pubkey: vector::empty<u8>(),
+        used_nonces: table::new<u64, bool>(ctx),
+    });
+}
+
+// ---------- Admin ----------
+
+/// Set/rotate the voucher authority ed25519 public key (32 bytes).
+public entry fun set_authority_pubkey(
+    _admin: &AdminCap,
+    registry: &mut ChronicleRegistry,
+    pubkey: vector<u8>,
+) {
+    assert!(vector::length(&pubkey) == 32, EBadPubkey);
+    registry.authority_pubkey = pubkey;
 }
 
 // ---------- Mint ----------
 
-/// Mint a Chronicle NFT for the calling player. Validates field lengths,
-/// increments the per-battle counter, and emits ChronicleMinted.
-///
-/// `metadata_blob_id` must be the Walrus blob ID returned by uploading the
-/// full chronicle payload (long-form text, hero pose, battle log JSON,
-/// optional screenshot) to Walrus prior to calling this entry.
+/// Mint a Chronicle NFT for the calling player. Requires a valid authority
+/// voucher (see module header for the signed message layout). The tier is
+/// computed on-chain from the per-battle rank + the voucher-attested hp_pct.
 public entry fun mint_chronicle(
     registry: &mut ChronicleRegistry,
     battle_id: u8,
     hero_id: u8,
     title: vector<u8>,
     inscription: vector<u8>,
-    rating: u8,
+    hp_pct: u8,
     metadata_blob_id: vector<u8>,
+    nonce: u64,
+    expiry_ms: u64,
+    signature: vector<u8>,
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    // ---- validate ----
+    // ---- validate fields ----
     assert!(battle_id >= 1 && battle_id <= MAX_BATTLE_ID, EInvalidBattleId);
     assert!(hero_id >= 1 && hero_id <= MAX_HERO_ID, EInvalidHeroId);
-    assert!(rating <= MAX_RATING, EInvalidRating);
+    assert!(hp_pct <= 100, EInvalidHp);
 
     let title_len = vector::length(&title);
     assert!(title_len > 0, ETitleEmpty);
@@ -176,24 +220,32 @@ public entry fun mint_chronicle(
     assert!(blob_id_len > 0, EBlobIdEmpty);
     assert!(blob_id_len <= MAX_BLOB_ID_LEN, EBlobIdTooLong);
 
-    // ---- bump counter ----
-    let next_order = if (table::contains(&registry.counts, battle_id)) {
-        let prev = table::borrow_mut(&mut registry.counts, battle_id);
-        *prev = *prev + 1;
-        *prev
-    } else {
-        table::add(&mut registry.counts, battle_id, 1);
-        1
-    };
-
     let player = tx_context::sender(ctx);
+
+    // ---- verify voucher (anti-cheat) ----
+    assert!(vector::length(&registry.authority_pubkey) == 32, EAuthorityNotSet);
+    assert!(clock::timestamp_ms(clock) <= expiry_ms, EVoucherExpired);
+    assert!(!table::contains(&registry.used_nonces, nonce), ENonceUsed);
+    let msg = build_voucher_message(player, battle_id, hero_id, hp_pct, nonce, expiry_ms);
+    assert!(ed25519::ed25519_verify(&signature, &registry.authority_pubkey, &msg), EBadSignature);
+    table::add(&mut registry.used_nonces, nonce, true);
+
+    // ---- per-battle rank gate: #1001+ get no NFT ----
+    let current = current_count(registry, battle_id);
+    assert!(current < RANK_MAX, ENoNFT);
+    let next_order = current + 1;
+    set_count(registry, battle_id, next_order);
+
+    let tier = compute_tier(next_order, hp_pct);
+
     let nft = Chronicle {
         id: object::new(ctx),
         battle_id,
         hero_id,
         title: string::utf8(title),
         inscription: string::utf8(inscription),
-        rating,
+        hp_pct,
+        tier,
         mint_order: next_order,
         is_first_chronicler: next_order == 1,
         mint_timestamp_ms: clock::timestamp_ms(clock),
@@ -201,17 +253,64 @@ public entry fun mint_chronicle(
         player,
     };
 
-    let chronicle_id = object::id(&nft);
-
     event::emit(ChronicleMinted {
-        chronicle_id,
+        chronicle_id: object::id(&nft),
         player,
         battle_id,
         mint_order: next_order,
+        tier,
         is_first: next_order == 1,
     });
 
     transfer::public_transfer(nft, player);
+}
+
+// ---------- Internal ----------
+
+/// Floor-by-rank, upgrade-by-HP. Caller must ensure rank <= RANK_MAX.
+fun compute_tier(rank: u64, hp_pct: u8): u8 {
+    let floor = if (rank <= RANK_SILVER_FLOOR) {
+        TIER_SILVER
+    } else if (rank <= RANK_BRONZE_FLOOR) {
+        TIER_BRONZE
+    } else {
+        TIER_NORMAL
+    };
+    if (hp_pct >= HP_UPGRADE_THRESHOLD) { floor + 1 } else { floor }
+}
+
+/// Canonical voucher message — must byte-match the backend signer.
+fun build_voucher_message(
+    player: address,
+    battle_id: u8,
+    hero_id: u8,
+    hp_pct: u8,
+    nonce: u64,
+    expiry_ms: u64,
+): vector<u8> {
+    let mut m = bcs::to_bytes(&player);
+    vector::append(&mut m, bcs::to_bytes(&battle_id));
+    vector::append(&mut m, bcs::to_bytes(&hero_id));
+    vector::append(&mut m, bcs::to_bytes(&hp_pct));
+    vector::append(&mut m, bcs::to_bytes(&nonce));
+    vector::append(&mut m, bcs::to_bytes(&expiry_ms));
+    m
+}
+
+fun current_count(registry: &ChronicleRegistry, battle_id: u8): u64 {
+    if (table::contains(&registry.counts, battle_id)) {
+        *table::borrow(&registry.counts, battle_id)
+    } else {
+        0
+    }
+}
+
+fun set_count(registry: &mut ChronicleRegistry, battle_id: u8, value: u64) {
+    if (table::contains(&registry.counts, battle_id)) {
+        *table::borrow_mut(&mut registry.counts, battle_id) = value;
+    } else {
+        table::add(&mut registry.counts, battle_id, value);
+    }
 }
 
 // ---------- Read accessors ----------
@@ -220,7 +319,8 @@ public fun battle_id(c: &Chronicle): u8 { c.battle_id }
 public fun hero_id(c: &Chronicle): u8 { c.hero_id }
 public fun title(c: &Chronicle): &String { &c.title }
 public fun inscription(c: &Chronicle): &String { &c.inscription }
-public fun rating(c: &Chronicle): u8 { c.rating }
+public fun hp_pct(c: &Chronicle): u8 { c.hp_pct }
+public fun tier(c: &Chronicle): u8 { c.tier }
 public fun mint_order(c: &Chronicle): u64 { c.mint_order }
 public fun is_first_chronicler(c: &Chronicle): bool { c.is_first_chronicler }
 public fun mint_timestamp_ms(c: &Chronicle): u64 { c.mint_timestamp_ms }
@@ -228,20 +328,59 @@ public fun metadata_blob_id(c: &Chronicle): &String { &c.metadata_blob_id }
 public fun player(c: &Chronicle): address { c.player }
 
 public fun count_for_battle(registry: &ChronicleRegistry, battle_id: u8): u64 {
-    if (table::contains(&registry.counts, battle_id)) {
-        *table::borrow(&registry.counts, battle_id)
-    } else {
-        0
-    }
+    current_count(registry, battle_id)
 }
 
 // ---------- Test-only helpers ----------
 
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
-    let registry = ChronicleRegistry {
+    transfer::share_object(ChronicleRegistry {
         id: object::new(ctx),
         counts: table::new<u8, u64>(ctx),
-    };
-    transfer::share_object(registry);
+        authority_pubkey: vector::empty<u8>(),
+        used_nonces: table::new<u64, bool>(ctx),
+    });
+}
+
+#[test_only]
+/// Mint bypassing the voucher, to test rank/tier logic. Returns the NFT.
+public fun mint_for_testing(
+    registry: &mut ChronicleRegistry,
+    battle_id: u8,
+    hero_id: u8,
+    hp_pct: u8,
+    metadata_blob_id: vector<u8>,
+    clock: &Clock,
+    ctx: &mut TxContext,
+): Chronicle {
+    let current = current_count(registry, battle_id);
+    assert!(current < RANK_MAX, ENoNFT);
+    let next_order = current + 1;
+    set_count(registry, battle_id, next_order);
+    Chronicle {
+        id: object::new(ctx),
+        battle_id,
+        hero_id,
+        title: string::utf8(b"t"),
+        inscription: string::utf8(b""),
+        hp_pct,
+        tier: compute_tier(next_order, hp_pct),
+        mint_order: next_order,
+        is_first_chronicler: next_order == 1,
+        mint_timestamp_ms: clock::timestamp_ms(clock),
+        metadata_blob_id: string::utf8(metadata_blob_id),
+        player: tx_context::sender(ctx),
+    }
+}
+
+#[test_only]
+public fun set_count_for_testing(registry: &mut ChronicleRegistry, battle_id: u8, value: u64) {
+    set_count(registry, battle_id, value);
+}
+
+#[test_only]
+public fun destroy_for_testing(c: Chronicle) {
+    let Chronicle { id, battle_id: _, hero_id: _, title: _, inscription: _, hp_pct: _, tier: _, mint_order: _, is_first_chronicler: _, mint_timestamp_ms: _, metadata_blob_id: _, player: _ } = c;
+    object::delete(id);
 }
