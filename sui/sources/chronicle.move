@@ -54,8 +54,17 @@ const ENonceUsed: u64 = 12;
 const EBadSignature: u64 = 13;
 const ENoNFT: u64 = 14;
 const EBadPubkey: u64 = 15;
+const EWrongVersion: u64 = 16;
+const EPaused: u64 = 17;
+const EAlreadyMigrated: u64 = 18;
 
 // ---------- Constants ----------
+
+/// On-chain code version. Every entry asserts the shared registry carries this
+/// same version, so once `migrate` bumps it after a package upgrade, code from
+/// the OLD package version (which still hardcodes the old VERSION) can no longer
+/// touch the registry. Bump this on each upgrade that adds a `migrate` step.
+const VERSION: u64 = 1;
 
 const MAX_TITLE_LEN: u64 = 320;
 const MAX_INSCRIPTION_LEN: u64 = 200;
@@ -88,6 +97,10 @@ public struct AdminCap has key, store {
 /// Shared registry: per-battle mint order + voucher authority + used nonces.
 public struct ChronicleRegistry has key {
     id: UID,
+    /// Code-version gate (see VERSION). Entries require this == VERSION.
+    version: u64,
+    /// Operational kill-switch: when true, mint aborts (admin can pause).
+    paused: bool,
     /// battle_id -> count of chronicles minted for that battle so far.
     counts: Table<u8, u64>,
     /// ed25519 public key (32 bytes) of the off-chain voucher signer. Empty
@@ -149,9 +162,9 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         string::utf8(
             b"A Chronicle of the Chainoa Eternal Chronicles. Battle {battle_id}, written by chronicler #{mint_order}.",
         ),
-        string::utf8(b"https://conssslabs.github.io/public-assets/chronicle/battle-{battle_id}-{tier}.png"),
+        string::utf8(b"https://conssslab.github.io/public-assets/chronicle/battle-{battle_id}-{tier}.png"),
         string::utf8(b"https://conssswars.com"),
-        string::utf8(b"ConsssLabs"),
+        string::utf8(b"ConsssLab"),
         string::utf8(b"{tier}"),
         string::utf8(b"{metadata_blob_id}"),
         string::utf8(b"https://aggregator.walrus-testnet.walrus.space/v1/blobs/{metadata_blob_id}"),
@@ -169,6 +182,8 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
     // Share the registry (authority key set post-deploy via set_authority_pubkey).
     transfer::share_object(ChronicleRegistry {
         id: object::new(ctx),
+        version: VERSION,
+        paused: false,
         counts: table::new<u8, u64>(ctx),
         authority_pubkey: vector::empty<u8>(),
         used_nonces: table::new<u64, bool>(ctx),
@@ -183,8 +198,29 @@ public entry fun set_authority_pubkey(
     registry: &mut ChronicleRegistry,
     pubkey: vector<u8>,
 ) {
+    assert!(registry.version == VERSION, EWrongVersion);
     assert!(vector::length(&pubkey) == 32, EBadPubkey);
     registry.authority_pubkey = pubkey;
+}
+
+/// Pause / unpause minting (operational kill-switch). Admin-only.
+public entry fun set_paused(_admin: &AdminCap, registry: &mut ChronicleRegistry, paused: bool) {
+    assert!(registry.version == VERSION, EWrongVersion);
+    registry.paused = paused;
+}
+
+/// After a package upgrade, bump the registry to the new code VERSION. Old
+/// package code (which still asserts the old VERSION) can no longer use the
+/// registry once this runs. Admin-only; can only move the version forward.
+public entry fun migrate(_admin: &AdminCap, registry: &mut ChronicleRegistry) {
+    assert!(registry.version < VERSION, EAlreadyMigrated);
+    registry.version = VERSION;
+}
+
+/// Version gate + pause switch — every player-facing entry must pass this.
+fun assert_active(registry: &ChronicleRegistry) {
+    assert!(registry.version == VERSION, EWrongVersion);
+    assert!(!registry.paused, EPaused);
 }
 
 // ---------- Mint ----------
@@ -206,6 +242,9 @@ public entry fun mint_chronicle(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
+    // ---- version gate + pause switch ----
+    assert_active(registry);
+
     // ---- validate fields ----
     assert!(battle_id >= 1 && battle_id <= MAX_BATTLE_ID, EInvalidBattleId);
     assert!(hero_id >= 1 && hero_id <= MAX_HERO_ID, EInvalidHeroId);
@@ -331,12 +370,18 @@ public fun count_for_battle(registry: &ChronicleRegistry, battle_id: u8): u64 {
     current_count(registry, battle_id)
 }
 
+public fun version(registry: &ChronicleRegistry): u64 { registry.version }
+public fun is_paused(registry: &ChronicleRegistry): bool { registry.paused }
+
 // ---------- Test-only helpers ----------
 
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
+    transfer::public_transfer(AdminCap { id: object::new(ctx) }, tx_context::sender(ctx));
     transfer::share_object(ChronicleRegistry {
         id: object::new(ctx),
+        version: VERSION,
+        paused: false,
         counts: table::new<u8, u64>(ctx),
         authority_pubkey: vector::empty<u8>(),
         used_nonces: table::new<u64, bool>(ctx),

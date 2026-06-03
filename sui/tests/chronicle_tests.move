@@ -3,7 +3,7 @@ module chronicle::chronicle_tests;
 
 use sui::test_scenario as ts;
 use sui::clock::{Self, Clock};
-use chronicle::chronicle::{Self, ChronicleRegistry};
+use chronicle::chronicle::{Self, ChronicleRegistry, AdminCap};
 
 // Force a given per-battle rank, mint via the test bypass, assert tier+order.
 #[test_only]
@@ -84,6 +84,59 @@ fun rank_over_max_aborts() {
     chronicle::destroy_for_testing(nft); // unreachable
 
     clock::destroy_for_testing(clk);
+    ts::return_shared(reg);
+    ts::end(sc);
+}
+
+// Fresh registry: version == 1, not paused; AdminCap can pause.
+#[test]
+fun version_gate_defaults_and_pause() {
+    let mut sc = ts::begin(@0xA);
+    chronicle::init_for_testing(ts::ctx(&mut sc));
+    ts::next_tx(&mut sc, @0xA);
+    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
+    let admin = ts::take_from_sender<AdminCap>(&sc);
+    assert!(chronicle::version(&reg) == 1, 1);
+    assert!(!chronicle::is_paused(&reg), 2);
+    chronicle::set_paused(&admin, &mut reg, true);
+    assert!(chronicle::is_paused(&reg), 3);
+    chronicle::set_paused(&admin, &mut reg, false);
+    assert!(!chronicle::is_paused(&reg), 4);
+    ts::return_to_sender(&sc, admin);
+    ts::return_shared(reg);
+    ts::end(sc);
+}
+
+// migrate on a current-version registry aborts (nothing to migrate).
+#[test]
+#[expected_failure]
+fun migrate_on_current_aborts() {
+    let mut sc = ts::begin(@0xA);
+    chronicle::init_for_testing(ts::ctx(&mut sc));
+    ts::next_tx(&mut sc, @0xA);
+    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
+    let admin = ts::take_from_sender<AdminCap>(&sc);
+    chronicle::migrate(&admin, &mut reg); // version already == VERSION -> abort
+    ts::return_to_sender(&sc, admin);
+    ts::return_shared(reg);
+    ts::end(sc);
+}
+
+// Paused registry blocks the real mint entry (aborts at the version/pause gate).
+#[test]
+#[expected_failure]
+fun paused_blocks_mint() {
+    let mut sc = ts::begin(@0xA);
+    chronicle::init_for_testing(ts::ctx(&mut sc));
+    ts::next_tx(&mut sc, @0xA);
+    let mut reg = ts::take_shared<ChronicleRegistry>(&sc);
+    let admin = ts::take_from_sender<AdminCap>(&sc);
+    let clk = clock::create_for_testing(ts::ctx(&mut sc));
+    chronicle::set_paused(&admin, &mut reg, true);
+    // assert_active runs first, so dummy voucher args never get inspected.
+    chronicle::mint_chronicle(&mut reg, 1, 1, b"t", b"", 50, b"b", 0, 9999999999999, b"x", &clk, ts::ctx(&mut sc));
+    clock::destroy_for_testing(clk);
+    ts::return_to_sender(&sc, admin);
     ts::return_shared(reg);
     ts::end(sc);
 }

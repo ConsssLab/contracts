@@ -109,9 +109,9 @@ fun init(otw: WITNESS_SEAL, ctx: &mut TxContext) {
         string::utf8(
             b"Soulbound. Cannot be transferred. Witness to the historic 90.9% validator vote at Crystal Sanctum, the night Suiren refused to fall.",
         ),
-        string::utf8(b"https://chainoa.consss.io/witness/{id}.png"),
-        string::utf8(b"https://chainoa.consss.io"),
-        string::utf8(b"ConsssLabs"),
+        string::utf8(b"https://conssslab.github.io/public-assets/witness/seal.png"),
+        string::utf8(b"https://conssswars.com"),
+        string::utf8(b"ConsssLab"),
     ];
 
     let mut display = display::new_with_fields<WitnessSeal>(
