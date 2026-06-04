@@ -1,4 +1,4 @@
-# ConsssLabs Contracts
+# ConsssLab Contracts
 
 Smart contracts for **ConSSS Wars: Echoes of Chainoa 鏈州英雄傳** — a
 turn-based tactical RPG that mints "Chronicle" NFTs after each battle. Game
@@ -8,7 +8,7 @@ spec lives in `../docs/`.
 
 | Folder    | Chain    | Status                                          |
 |-----------|----------|-------------------------------------------------|
-| `sui/`    | Sui      | **Deployed to testnet 2026-05-22** (W-sp2)      |
+| `sui/`    | Sui      | **Deployed to testnet (latest 2026-06-03, version-gated)** |
 | `evm/`    | EVM      | Skeleton — flesh out post-hackathon              |
 | `solana/` | Solana   | Skeleton — flesh out post-hackathon              |
 
@@ -23,10 +23,10 @@ The canonical record lives in [`sui/Published.toml`](./sui/Published.toml)
 
 | Object | ID |
 |--------|----|
-| `chronicle` package | `0x82575297ea69635547e021d60f032c2f1051c08124cb9c55ded2c1696707655f` |
-| `ChronicleRegistry` (shared) | `0x3b5b6698de3f7e7eeeb1de4c88c7d018c4e3a5997a8b7e83612654335c91bed2` |
-| `WitnessRegistry` (shared) | `0x7de4299b1e318826523eb82ae019881dcbb6df031e6dee1d266469781d0da90e` |
-| `UpgradeCap` | `0x55c0ae6402ee69a8dedc0e31286129e0da5d258bca699bf607b09fc2b98404be` |
+| `chronicle` package | `0x5efb10426a8929e88510dbc80711e2bf371aca08b179167b3037e20d097f6980` |
+| `ChronicleRegistry` (shared) | `0x19b9f0fe18ea27a56f75b6d6302e00e80a9bf1656c81f87eecbb82a4bc3109ee` |
+| `WitnessRegistry` (shared) | `0x7359529def5f8a225e6e7c460ff44ee4f276bdd5ce50c0c7b1e10faaa3e831d0` |
+| `UpgradeCap` | `0xe13be9e1c8c6228014d3ccc1d385cb422e9e57ec34da7713a226ed76bec249a8` |
 
 Chain ID: `4c78adac` (Sui testnet). RPC traffic goes through
 **Tatum** (`https://sui-testnet.gateway.tatum.io`) per the hackathon track
@@ -38,7 +38,8 @@ Two modules in `sui/sources/`, mirrored field-by-field across chains:
 
 - **`chronicle::chronicle`** — transferable battle keepsake.
   `mint_chronicle(...)` records `battle_id`, `hero_id`, player-edited
-  `title` / `inscription`, system-graded `rating`, global `mint_order`,
+  `title` / `inscription`, an on-chain-computed `tier` (Normal/Bronze/Silver/Gold,
+  from per-battle clear-rank + HP), global `mint_order`,
   `is_first_chronicler`, `mint_timestamp_ms`, the player's address, and a
   **`metadata_blob_id`** anchor pointing at the long-form battle log stored
   on Walrus. A shared `ChronicleRegistry` keeps a per-`battle_id` counter

@@ -36,6 +36,7 @@ The init functions create both registries as shared objects automatically.
 
 ## Display metadata
 
-Chronicle uses `sui::display` so wallets render
-`https://chainoa.consss.io/chronicle/{id}.png`. Update the base URL once W7 art
-ships.
+Chronicle uses `sui::display` so wallets render per-tier art at
+`https://conssslab.github.io/public-assets/chronicle/battle-{battle_id}-{tier}.png`.
+The Display object is held by the deployer and can be updated without a package
+upgrade.
