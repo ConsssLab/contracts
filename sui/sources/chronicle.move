@@ -8,9 +8,13 @@
 // player's remaining-HP%, which the client cannot forge. Replay is blocked by a
 // one-time `nonce`; stale vouchers by `expiry_ms` vs the on-chain clock.
 //
-//   Voucher message = BCS bytes, in this exact order (backend must match):
-//     player:address(32) ++ battle_id:u8 ++ hero_id:u8 ++ hp_pct:u8
-//       ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+//   Voucher message = domain prefix ++ BCS bytes, in this exact order
+//   (backend signer must match byte-for-byte):
+//     b"ConSSSWars/chronicle-voucher/v1" ++ player:address(32) ++ battle_id:u8
+//       ++ hero_id:u8 ++ hp_pct:u8 ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+//   The domain prefix binds the signature to THIS contract/purpose, so an
+//   authority signature produced for anything else (or another deployment with
+//   a different key) cannot be replayed here.
 //   signed by the authority ed25519 secret key; the public key is stored in
 //   ChronicleRegistry.authority_pubkey (set/rotated via AdminCap).
 //
@@ -57,6 +61,7 @@ const EBadPubkey: u64 = 15;
 const EWrongVersion: u64 = 16;
 const EPaused: u64 = 17;
 const EAlreadyMigrated: u64 = 18;
+const EBadSigLen: u64 = 19;
 
 // ---------- Constants ----------
 
@@ -71,6 +76,11 @@ const MAX_INSCRIPTION_LEN: u64 = 200;
 const MAX_BATTLE_ID: u8 = 3;
 const MAX_HERO_ID: u8 = 20;
 const MAX_BLOB_ID_LEN: u64 = 128;
+
+/// Domain-separation prefix bound into the voucher message. The off-chain signer
+/// MUST prepend these exact bytes; it prevents an authority signature made for
+/// any other context or deployment from being replayed against this mint.
+const VOUCHER_DOMAIN: vector<u8> = b"ConSSSWars/chronicle-voucher/v1";
 
 // Tier ranking (per-battle mint rank).
 const RANK_SILVER_FLOOR: u64 = 100;   // 1..100   -> Silver floor
@@ -265,6 +275,7 @@ public entry fun mint_chronicle(
     assert!(vector::length(&registry.authority_pubkey) == 32, EAuthorityNotSet);
     assert!(clock::timestamp_ms(clock) <= expiry_ms, EVoucherExpired);
     assert!(!table::contains(&registry.used_nonces, nonce), ENonceUsed);
+    assert!(vector::length(&signature) == 64, EBadSigLen);
     let msg = build_voucher_message(player, battle_id, hero_id, hp_pct, nonce, expiry_ms);
     assert!(ed25519::ed25519_verify(&signature, &registry.authority_pubkey, &msg), EBadSignature);
     table::add(&mut registry.used_nonces, nonce, true);
@@ -327,7 +338,8 @@ fun build_voucher_message(
     nonce: u64,
     expiry_ms: u64,
 ): vector<u8> {
-    let mut m = bcs::to_bytes(&player);
+    let mut m = VOUCHER_DOMAIN;
+    vector::append(&mut m, bcs::to_bytes(&player));
     vector::append(&mut m, bcs::to_bytes(&battle_id));
     vector::append(&mut m, bcs::to_bytes(&hero_id));
     vector::append(&mut m, bcs::to_bytes(&hp_pct));
