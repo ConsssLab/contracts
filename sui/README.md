@@ -1,42 +1,20 @@
-# Chronicle — Sui Move package
+# Sui Move packages
 
-Two modules:
+Two packages — see the repo root [`../README.md`](../README.md) for the full
+overview (anti-cheat voucher model, governance, mainnet addresses).
 
-- `chronicle::chronicle` — transferable Chronicle NFT minted after every battle.
-  A shared `ChronicleRegistry` keeps a per-`battle_id` counter so each NFT
-  records which numbered chronicler the player is.
-- `chronicle::witness_seal` — **soulbound** Validators' Witness, mint-once-per-
-  player and only for Battle 3. The struct intentionally omits the `store`
-  ability and exposes no transfer entry function.
+- [`chronicle/`](./chronicle) — package `chronicle`, with modules `chronicle`
+  (transferable, tiered per-battle **Chronicle** NFT) and `echoes_of_chainoa`
+  (soulbound **Finale Badge**). Publish this first.
+- [`event_01_gift/`](./event_01_gift) — the one-per-wallet limited-time
+  **"1st Gift"**; depends on `chronicle`.
 
-## Build
-
-```bash
-sui move build
-```
-
-## Test
+## Build & test
 
 ```bash
-sui move test
+cd chronicle     && sui move build && sui move test   # 12 tests
+cd event_01_gift && sui move build && sui move test   #  6 tests
 ```
 
-## Publish (testnet)
-
-```bash
-sui client publish --gas-budget 200000000
-```
-
-After publish, capture:
-- `PACKAGE_ID`
-- `ChronicleRegistry` shared object id
-- `WitnessRegistry` shared object id
-
-The init functions create both registries as shared objects automatically.
-
-## Display metadata
-
-Chronicle uses `sui::display` so wallets render per-tier art at
-`https://conssslab.github.io/public-assets/chronicle/battle-{battle_id}-{tier}.png`.
-The Display object is held by the deployer and can be updated without a package
-upgrade.
+`Published.toml` (committed, per package) is the source of truth for deployed
+addresses; `Move.lock` is toolchain-local.
