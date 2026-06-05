@@ -6,8 +6,9 @@ soulbound **Finale Badge** for clearing the climax, and a one-per-wallet
 limited-time **Gift** for completing the campaign. Sui is the primary chain.
 
 > **No token. No presale. No airdrop.** Minting is gas-only — the team takes no
-> cut. Game design and operational runbooks live in a separate private repo
-> (`../docs/`).
+> cut. The contracts hold **no funds** (no `Coin`/`Balance` anywhere), so there
+> is nothing to drain. Game design and operational runbooks live in a separate
+> private repo (`../docs/`).
 
 ## Status
 
@@ -24,14 +25,17 @@ limited-time **Gift** for completing the campaign. Sui is the primary chain.
 Sui is the canonical chain. `evm/` and `solana/` are intentionally empty
 (`.gitkeep` only), held in-tree for later cross-chain chapters.
 
-## Packages (`sui/`)
+## Modules
 
-| Package         | Module(s)                        | Mints                                                                          |
-|-----------------|----------------------------------|-------------------------------------------------------------------------------|
-| `chronicle`     | `chronicle`, `echoes_of_chainoa` | Per-battle **Chronicle** (transferable, tiered) + soulbound **Finale Badge**  |
-| `event_01_gift` | `event_01_gift`                  | One-per-wallet **"1st Gift"** for clearing battles 1–3                         |
+Three Move modules across two published packages:
 
-`event_01_gift` checks `Chronicle` ownership at mint, so it depends on the
+| Module | Package | Purpose |
+|--------|---------|---------|
+| `chronicle::chronicle` | `chronicle` (`0x5760b2685d41bd45e2991dedc242e866b1aca9ff3c3a5e193445751c2b8dfe4b`) | Transferable, on-chain-tiered per-battle **Chronicle** NFT (Normal / Bronze / Silver / Gold by clear-rank + HP). |
+| `chronicle::echoes_of_chainoa` | `chronicle` (same package) | **Soulbound** Finale Badge for clearing the climax (Battle 3); `key`-only, no transfer. |
+| `event_01_gift::event_01_gift` | `event_01_gift` (`0xd1ed457cb4f1bb209c09a094f772472db15c115a29eb5995b7cb2a2313227896`) | One-per-wallet limited-time **"1st Gift"**, gated by holding the Chronicles the wallet earned for battles 1 / 2 / 3. |
+
+`event_01_gift` reads `Chronicle` ownership at mint, so it depends on the
 `chronicle` package — **publish `chronicle` first.**
 
 ### `chronicle::chronicle` — battle Chronicle
@@ -63,9 +67,9 @@ change.
 A **soulbound** badge for clearing the installment's climax (Battle 3). The
 `FinaleBadge` struct has `key` only (no `store`), exposes no transfer entry
 function, and is delivered with `transfer::transfer`, so it can never move once
-minted. One per player, enforced by the shared `FinaleRegistry`. The badge fixes
-its battle forever; future installments ship their own finale module rather than
-mutating this one.
+minted. One per player, enforced by the shared `FinaleRegistry`. The module
+fixes its battle (`FINALE_BATTLE_ID = 3`) forever; future installments ship their
+own finale module rather than mutating this one.
 
 ### `event_01_gift::event_01_gift` — limited-time event
 
@@ -76,31 +80,112 @@ battles within `{1, 2, 3}`. Binding to `player` blocks claiming with frozen or
 transferred-in Chronicles. The numbered name (`event_01_…`) reserves the
 namespace for future events.
 
-## On-chain anti-cheat: authority vouchers
+## Data-structure design
 
-A client cannot mint by crafting a transaction directly. `mint_chronicle` and
-`mint_finale` each require an **ed25519 voucher** signed by an off-chain
-authority key the game backend controls; the voucher attests facts the client
-cannot forge (remaining-HP%, finale clearance). The signed message is a
-domain-prefixed BCS byte string:
+Three shared registries track all mutable state; the three NFT structs carry only
+immutable per-item data. Field names below are exactly as defined in the modules.
 
-```
-DOMAIN ++ registry_id:address(32) ++ player:address(32)
-       ++ battle_id:u8 ++ hero_id:u8 ++ (hp_pct|rating):u8
-       ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
-```
+### Shared registries
 
-- **Domain separator** — `ConSSSWars/chronicle-voucher/v1` (a distinct
-  `…/finale-voucher/v1` for the badge) binds a signature to this contract and
-  purpose; the two vouchers cannot be cross-used.
-- **`registry_id`** binds the voucher to this exact deployment — no
-  cross-deployment replay.
-- **`nonce`** (kept in `used_nonces`) blocks replay; **`expiry_ms`** vs the
-  on-chain `Clock` blocks stale reuse; the signature must be exactly 64 bytes and
-  the authority public key 32 bytes.
+| Registry (shared object) | Module | Key fields |
+|--------------------------|--------|------------|
+| `ChronicleRegistry` | `chronicle` | `counts: Table<u8, u64>` (per-battle mint order), `used_nonces: Table<u64, bool>` (voucher replay protection), `authority_pubkey`, admin-configurable `max_battle_id` / `max_hero_id`, `version`, `paused` |
+| `FinaleRegistry` | `echoes_of_chainoa` | `minted: Table<address, bool>` (one-per-player), `total_minted`, `authority_pubkey`, `used_nonces: Table<u64, bool>`, `version`, `paused` |
+| `MintCounter` | `event_01_gift` | `claimed: Table<address, bool>` (one-per-wallet), `minted`, `end_ms` (deadline), `version`, `paused` |
 
-The on-chain message layout is pinned to the backend signer byte-for-byte by the
-`chronicle::chronicle_tests::voucher_message_byte_layout` test.
+### NFT structs
+
+| Struct | Abilities | Transferability |
+|--------|-----------|-----------------|
+| `Chronicle` | `key, store` | Transferable keepsake |
+| `FinaleBadge` | `key` only | **Soulbound** (no `store`, no transfer entry) |
+| `Gift` | `key, store` | Transferable reward |
+
+## Capability design
+
+Every governance action is gated by an explicit capability object; every
+player-facing entry function is gated by a version check (`VERSION` /
+`assert_active` / `migrate`) **plus** a `paused` kill-switch. The package
+deliberately **merges** the two NFT admins in the `chronicle` package under one
+cap so the whole package is governed by a single key, and keeps the gift event's
+admin separate so its governance can be burned independently once the event ends.
+
+| Capability  | Count | Holder | Purpose |
+|-------------|-------|--------|---------|
+| `chronicle::AdminCap` | 1 (merged) | 2/3 multisig (cold) | Single admin for **both** `chronicle` and `echoes_of_chainoa`: rotate the voucher authority pubkey, pause, set `max_battle_id` / `max_hero_id`, migrate after upgrade |
+| `event_01_gift::GiftAdminCap` | 1 | 2/3 multisig (cold) | Pause, set event deadline `end_ms`, migrate, and `burn_admin_cap` to retire governance after the event |
+| `UpgradeCap` | 2 (one per package) | 2/3 multisig (cold) | Package upgrades |
+| `Publisher` | 3 (one per module) | 2/3 multisig (cold) | `Display` administration only |
+| `Display` | 3 (one per NFT type) | operational wallet (hot) | NFT art metadata; updating it can't mint, upgrade, or steal |
+
+The `echoes_of_chainoa` module imports and reuses `chronicle::AdminCap` rather
+than defining its own — one cap, one package, no second key to protect.
+
+## Multisig
+
+All governance capabilities — `UpgradeCap` ×2, `chronicle::AdminCap`,
+`event_01_gift::GiftAdminCap`, and `Publisher` ×3 — are held by a **2-of-3
+multisig** (`0xd86de144b080a31394c7d5506ecff077196da2a30f6e8aab1637d2cee2f0fb0d`)
+whose keys are split across **3 separate devices**. None of these caps live on
+the deployer or a developer machine. Only the `Display` objects remain in a hot
+operational wallet, so routine art updates never need to touch a cap that could
+mint, upgrade, or move funds.
+
+No capability, key, mnemonic, or secret lives in this repo (see `.gitignore`).
+
+## Security protections
+
+- **ed25519 authority voucher (anti-cheat).** A client cannot mint by crafting a
+  transaction directly. `mint_chronicle` and `mint_finale` each require a voucher
+  signed by an off-chain authority key the game backend controls, attesting facts
+  the client cannot forge (remaining-HP%, finale clearance). The signed message is
+  a domain-prefixed BCS byte string:
+
+  ```
+  DOMAIN ++ registry_id:address(32) ++ player:address(32)
+         ++ battle_id:u8 ++ hero_id:u8 ++ (hp_pct|rating):u8
+         ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+  ```
+
+  - **Domain separator** — `ConSSSWars/chronicle-voucher/v1` (and a distinct
+    `ConSSSWars/finale-voucher/v1` for the badge) binds a signature to this
+    contract and purpose; the two vouchers cannot be cross-used.
+  - **`registry_id` binding** pins the voucher to this exact deployment — no
+    cross-deployment replay, even if an authority key is ever reused elsewhere.
+  - **`nonce`** (kept in `used_nonces`) blocks replay; **`expiry_ms`** checked
+    against the on-chain `Clock` blocks stale reuse; the signature must be exactly
+    64 bytes and the authority public key 32 bytes.
+
+- **Gift `player == caller` binding.** The event verifies each `&Chronicle`'s
+  `player` field equals the caller, defeating the frozen-/transferred-Chronicle
+  bypass (a frozen Chronicle's `player` is still the original clearer, not the
+  caller). Combined with the exact `{1, 2, 3}` battle-set gate and one-per-wallet
+  `claimed` table, a given set can only ever yield its single owner's one claim.
+
+- **Soulbound finale.** `FinaleBadge` has no `store` and no transfer entry, so it
+  is permanently bound to the player who earned it.
+
+- **Version gate + pause on every entry.** Each player-facing entry asserts the
+  registry `version == VERSION` and `!paused`; after a package upgrade, `migrate`
+  bumps the registry so old package code can no longer touch it.
+
+- **Cold-key governance.** All caps sit in a 2/3 multisig across 3 devices (see
+  above); only `Display` is hot.
+
+- **No funds at risk.** The contracts hold no `Coin`/`Balance`, so there is
+  nothing to drain even if a key were lost.
+
+- **Cross-language byte-layout pinning.** The on-chain voucher message layout is
+  pinned to the backend signer byte-for-byte by the
+  `chronicle::chronicle_tests::voucher_message_byte_layout` test.
+
+**Tests:** `chronicle` 12, `event_01_gift` 6.
+
+### Security review
+
+The contracts were **reviewed by automated security review (Codex + Claude) and a
+multi-agent audit**. The review **found no high-confidence vulnerabilities**.
+This is a review outcome, not an absolute guarantee that the code is bug-free.
 
 ## Walrus
 
@@ -109,22 +194,6 @@ player's Chronicle JSON (battle log, hero pose, screenshot, long text). The Move
 `Display` embeds a Walrus aggregator URL template, so any wallet or indexer
 resolving the Display can fetch the off-chain payload without an extra contract
 call.
-
-## Governance
-
-Every player-facing entry point passes a version gate (`VERSION` /
-`assert_active` / `migrate`) and a `paused` kill-switch. Capabilities are split
-between a cold 2/3 multisig and a hot operational wallet:
-
-| Capability                    | Holder                   | Purpose                                              |
-|-------------------------------|--------------------------|------------------------------------------------------|
-| `UpgradeCap` ×2               | 2/3 multisig (cold)      | Package upgrades                                     |
-| `chronicle::AdminCap`         | 2/3 multisig (cold)      | Rotate authority key, pause, set caps, migrate       |
-| `event_01_gift::GiftAdminCap` | 2/3 multisig (cold)      | Pause, set deadline, migrate, burn after the event   |
-| `Publisher` ×3                | 2/3 multisig (cold)      | Display administration                               |
-| `Display` ×3                  | operational wallet (hot) | Update NFT art metadata (no package upgrade needed)  |
-
-No capability, key, or secret lives in this repo (see `.gitignore`).
 
 ## Deployments
 
