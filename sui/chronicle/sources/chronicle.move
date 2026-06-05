@@ -10,8 +10,10 @@
 //
 //   Voucher message = domain prefix ++ BCS bytes, in this exact order
 //   (backend signer must match byte-for-byte):
-//     b"ConSSSWars/chronicle-voucher/v1" ++ player:address(32) ++ battle_id:u8
-//       ++ hero_id:u8 ++ hp_pct:u8 ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+//     b"ConSSSWars/chronicle-voucher/v1" ++ registry_id:address(32)
+//       ++ player:address(32) ++ battle_id:u8 ++ hero_id:u8 ++ hp_pct:u8
+//       ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
+//   registry_id binds the voucher to this deployment (no cross-deployment replay).
 //   The domain prefix binds the signature to THIS contract/purpose, so an
 //   authority signature produced for anything else (or another deployment with
 //   a different key) cannot be replayed here.
@@ -301,7 +303,7 @@ public entry fun mint_chronicle(
     assert!(clock::timestamp_ms(clock) <= expiry_ms, EVoucherExpired);
     assert!(!table::contains(&registry.used_nonces, nonce), ENonceUsed);
     assert!(vector::length(&signature) == 64, EBadSigLen);
-    let msg = build_voucher_message(player, battle_id, hero_id, hp_pct, nonce, expiry_ms);
+    let msg = build_voucher_message(object::id_address(registry), player, battle_id, hero_id, hp_pct, nonce, expiry_ms);
     assert!(ed25519::ed25519_verify(&signature, &registry.authority_pubkey, &msg), EBadSignature);
     table::add(&mut registry.used_nonces, nonce, true);
 
@@ -355,7 +357,13 @@ fun compute_tier(rank: u64, hp_pct: u8): u8 {
 }
 
 /// Canonical voucher message — must byte-match the backend signer.
+/// Layout: DOMAIN ++ registry_id:address(32) ++ player:address(32)
+///   ++ battle_id:u8 ++ hero_id:u8 ++ hp_pct:u8 ++ nonce:u64(LE) ++ expiry_ms:u64(LE)
+/// `registry_id` pins the voucher to THIS registry/deployment, so a voucher (even
+/// one signed by a reused authority key) can never be replayed against another
+/// deployment's registry.
 fun build_voucher_message(
+    registry_id: address,
     player: address,
     battle_id: u8,
     hero_id: u8,
@@ -364,6 +372,7 @@ fun build_voucher_message(
     expiry_ms: u64,
 ): vector<u8> {
     let mut m = VOUCHER_DOMAIN;
+    vector::append(&mut m, bcs::to_bytes(&registry_id));
     vector::append(&mut m, bcs::to_bytes(&player));
     vector::append(&mut m, bcs::to_bytes(&battle_id));
     vector::append(&mut m, bcs::to_bytes(&hero_id));
@@ -371,6 +380,13 @@ fun build_voucher_message(
     vector::append(&mut m, bcs::to_bytes(&nonce));
     vector::append(&mut m, bcs::to_bytes(&expiry_ms));
     m
+}
+
+#[test_only]
+public fun build_voucher_message_for_testing(
+    registry_id: address, player: address, battle_id: u8, hero_id: u8, hp_pct: u8, nonce: u64, expiry_ms: u64,
+): vector<u8> {
+    build_voucher_message(registry_id, player, battle_id, hero_id, hp_pct, nonce, expiry_ms)
 }
 
 fun current_count(registry: &ChronicleRegistry, battle_id: u8): u64 {

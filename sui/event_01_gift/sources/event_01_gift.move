@@ -27,6 +27,8 @@ const EWrongVersion: u64 = 3;
 const EPaused: u64 = 4;
 const EAlreadyMigrated: u64 = 5;
 const EEventEnded: u64 = 6;
+const ENotOwner: u64 = 7;
+const EWrongBattles: u64 = 8;
 
 // ---------- Constants ----------
 
@@ -155,10 +157,31 @@ public fun mint(
     let who = ctx.sender();
     assert!(!table::contains(&counter.claimed, who), EAlreadyClaimed);
 
+    // Each Chronicle must have been EARNED BY the caller. `player` is bound at
+    // mint to the voucher recipient, so requiring it to equal the caller rejects:
+    //   - frozen/immutable Chronicles: anyone can `public_freeze_object` a
+    //     Chronicle and then pass it by `&ref`, but its `player` field is the
+    //     original clearer, not the caller; and
+    //   - Chronicles transferred to a second wallet to claim in rotation.
+    // (This also makes per-Chronicle-ID tracking unnecessary: a given set can
+    //  only ever yield its single owner's one claim.)
+    assert!(
+        chronicle::player(c1) == who
+            && chronicle::player(c2) == who
+            && chronicle::player(c3) == who,
+        ENotOwner,
+    );
+
     let b1 = chronicle::battle_id(c1);
     let b2 = chronicle::battle_id(c2);
     let b3 = chronicle::battle_id(c3);
+    // Event #01 is specifically battles 1-3. Distinct + each in {1,2,3} pins the
+    // set to exactly {1,2,3}, so a future battle 4+ can't substitute (e.g. 1/4/5).
     assert!(b1 != b2 && b1 != b3 && b2 != b3, ENotThreeBattles);
+    assert!(
+        b1 >= 1 && b1 <= 3 && b2 >= 1 && b2 <= 3 && b3 >= 1 && b3 <= 3,
+        EWrongBattles,
+    );
 
     table::add(&mut counter.claimed, who, true);
     counter.minted = counter.minted + 1;
