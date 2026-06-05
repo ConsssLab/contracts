@@ -1,39 +1,27 @@
-// Module: chronicle::witness_seal
+// Module: chronicle::echoes_of_chainoa
 //
-// The Validators' Witness — a soulbound NFT minted by Battle 3 victors to
-// commemorate the historic 90.9% validator vote at Crystal Sanctum.
+// The soulbound finale badge for ConSSS Wars: **Echoes of Chainoa** (this
+// installment). Minted by clearing the installment's climax battle (Battle 3,
+// the Crystal Sanctum — the 90.9% validator vote). It commemorates a SPECIFIC
+// moment, so its battle is fixed forever; future installments ship their own
+// finale module (e.g. the next subtitle), not a change to this one.
 //
 // ============================================================================
-// SOULBOUND DESIGN
-// ----------------------------------------------------------------------------
-// `WitnessSeal` is declared with `key` only — NO `store` ability. In Sui Move
-// 2024, only objects that have `store` can be moved by `transfer::public_*`
-// or wrapped/unwrapped by user code. By withholding `store` and exposing no
-// transfer entry function, this module makes the WitnessSeal effectively
-// non-transferable after `transfer::transfer` lands it in the player's
-// account at mint time.
-//
-//   - The struct has `key` (so it can be an object).
-//   - The struct does NOT have `store` (so no public_transfer is possible).
-//   - This module exposes no transfer / send / give-away function.
-//   - One-per-player is enforced via the WitnessRegistry table.
-//
-// Result: once minted, a WitnessSeal cannot leave its owner's address.
+// SOULBOUND — `FinaleBadge` has `key` only (NO `store`): no public_transfer and
+// no transfer entry function, so once `transfer::transfer` lands it on the
+// player it can never move. One-per-player via the registry table.
 // ============================================================================
-// ANTI-CHEAT (voucher) — like chronicle, the mint is NOT open. `mint_witness`
-// requires an ed25519 voucher signed by the game's authority key (held
-// off-chain). The voucher attests that the player cleared Battle 3. Replay is
-// blocked by a one-time `nonce`, staleness by `expiry_ms` vs the on-chain clock.
+// ANTI-CHEAT — `mint_finale` requires an ed25519 voucher signed by the game
+// authority key (attests Battle-3 clearance). Replay blocked by a one-time
+// nonce, staleness by expiry vs the on-chain clock.
 //
-//   Voucher message = domain prefix ++ BCS bytes, in this exact order
-//   (backend signer must match byte-for-byte):
-//     b"ConSSSWars/witness-voucher/v1" ++ player:address(32) ++ battle_id:u8
+//   Voucher message = domain prefix ++ BCS bytes (backend must byte-match):
+//     b"ConSSSWars/finale-voucher/v1" ++ player:address(32) ++ battle_id:u8
 //       ++ hero_id:u8 ++ rating:u8 ++ nonce:u64(LE,8) ++ expiry_ms:u64(LE,8)
-//   The domain prefix is distinct from chronicle's, so a chronicle voucher can
-//   never be replayed as a witness voucher (even with the same authority key).
+//   Distinct domain from chronicle's, so the two vouchers can't be cross-used.
 // ============================================================================
 
-module chronicle::witness_seal;
+module chronicle::echoes_of_chainoa;
 
 use std::string::{Self, String};
 use std::bcs;
@@ -43,8 +31,7 @@ use sui::ed25519;
 use sui::event;
 use sui::package;
 use sui::table::{Self, Table};
-// Reuse chronicle's AdminCap as the single admin capability for the whole
-// package — one cap controls both chronicle and witness admin.
+// Reuse chronicle's AdminCap as the single admin capability for the package.
 use chronicle::chronicle::AdminCap;
 
 // ---------- Errors ----------
@@ -68,49 +55,40 @@ const EBadSigLen: u64 = 16;
 
 // ---------- Constants ----------
 
-/// Code-version gate; every player-facing entry asserts the shared registry
-/// carries this same version, so `migrate` after an upgrade locks out old code.
 const VERSION: u64 = 1;
 
-const WITNESS_BATTLE_ID: u8 = 3;
-// Title / inscription are validated in bytes; CJK characters take 3-4 bytes
-// in UTF-8, so a 50-character (zh-TW) inscription needs ~200 bytes.
+/// This installment's climax battle. Fixed forever — the badge commemorates THIS
+/// specific moment; future installments ship their own finale module.
+const FINALE_BATTLE_ID: u8 = 3;
 const MAX_TITLE_LEN: u64 = 320;
 const MAX_INSCRIPTION_LEN: u64 = 200;
 const MAX_HERO_ID: u8 = 20;
 const MAX_RATING: u8 = 3;
 
-/// Domain-separation prefix bound into the voucher message (distinct from
-/// chronicle's). The off-chain signer MUST prepend these exact bytes.
-const VOUCHER_DOMAIN: vector<u8> = b"ConSSSWars/witness-voucher/v1";
+const VOUCHER_DOMAIN: vector<u8> = b"ConSSSWars/finale-voucher/v1";
 
 // ---------- One-time witness for Display ----------
 
-public struct WITNESS_SEAL has drop {}
+public struct ECHOES_OF_CHAINOA has drop {}
 
 // ---------- Types ----------
 
-/// Shared registry: one-per-player tracking, running mint_order, the voucher
-/// authority public key, used nonces (replay), and the version/pause gate.
-public struct WitnessRegistry has key {
+/// Shared registry: one-per-player tracking, mint_order, voucher authority,
+/// used nonces, version/pause gate.
+public struct FinaleRegistry has key {
     id: UID,
-    /// Code-version gate (see VERSION).
     version: u64,
-    /// Operational kill-switch: when true, mint aborts.
     paused: bool,
     /// Players who have minted (one-per-player enforcement).
     minted: Table<address, bool>,
-    /// Number of seals minted so far.
     total_minted: u64,
-    /// ed25519 public key (32 bytes) of the off-chain voucher signer. Empty
-    /// until set via `set_authority_pubkey`; mint aborts while empty.
+    /// ed25519 public key (32 bytes) of the off-chain voucher signer.
     authority_pubkey: vector<u8>,
-    /// Spent voucher nonces (replay protection).
     used_nonces: Table<u64, bool>,
 }
 
-/// Soulbound Validators' Witness. NOTE: NO `store` ability — see header.
-public struct WitnessSeal has key {
+/// Soulbound finale badge. NOTE: NO `store` ability — see header.
+public struct FinaleBadge has key {
     id: UID,
     battle_id: u8,
     hero_id: u8,
@@ -119,16 +97,14 @@ public struct WitnessSeal has key {
     rating: u8,
     mint_order: u64,
     is_first_chronicler: bool,
-    /// Sui consensus timestamp (ms) at mint time. See chronicle.move for why
-    /// this is preferable to "block height" on Sui.
     mint_timestamp_ms: u64,
     player: address,
 }
 
 // ---------- Events ----------
 
-public struct WitnessSealMinted has copy, drop {
-    seal_id: ID,
+public struct FinaleBadgeMinted has copy, drop {
+    badge_id: ID,
     player: address,
     mint_order: u64,
     is_first: bool,
@@ -136,8 +112,7 @@ public struct WitnessSealMinted has copy, drop {
 
 // ---------- init ----------
 
-fun init(otw: WITNESS_SEAL, ctx: &mut TxContext) {
-    // Publisher object enables Display registration.
+fun init(otw: ECHOES_OF_CHAINOA, ctx: &mut TxContext) {
     let publisher = package::claim(otw, ctx);
 
     let keys = vector[
@@ -157,21 +132,16 @@ fun init(otw: WITNESS_SEAL, ctx: &mut TxContext) {
         string::utf8(b"ConsssLab"),
     ];
 
-    let mut display = display::new_with_fields<WitnessSeal>(
-        &publisher,
-        keys,
-        values,
-        ctx,
-    );
+    let mut display = display::new_with_fields<FinaleBadge>(&publisher, keys, values, ctx);
     display::update_version(&mut display);
 
     transfer::public_transfer(publisher, tx_context::sender(ctx));
     transfer::public_transfer(display, tx_context::sender(ctx));
 
     // Admin uses chronicle::AdminCap (created in chronicle's init) — ONE cap for
-    // the whole package controls both chronicle and witness admin.
+    // the whole package controls both chronicle and finale admin.
 
-    let registry = WitnessRegistry {
+    let registry = FinaleRegistry {
         id: object::new(ctx),
         version: VERSION,
         paused: false,
@@ -185,10 +155,9 @@ fun init(otw: WITNESS_SEAL, ctx: &mut TxContext) {
 
 // ---------- Admin ----------
 
-/// Set/rotate the voucher authority ed25519 public key (32 bytes).
 public entry fun set_authority_pubkey(
     _admin: &AdminCap,
-    registry: &mut WitnessRegistry,
+    registry: &mut FinaleRegistry,
     pubkey: vector<u8>,
 ) {
     assert!(registry.version == VERSION, EWrongVersion);
@@ -196,31 +165,27 @@ public entry fun set_authority_pubkey(
     registry.authority_pubkey = pubkey;
 }
 
-/// Pause / unpause minting (operational kill-switch). Admin-only.
-public entry fun set_paused(_admin: &AdminCap, registry: &mut WitnessRegistry, paused: bool) {
+public entry fun set_paused(_admin: &AdminCap, registry: &mut FinaleRegistry, paused: bool) {
     assert!(registry.version == VERSION, EWrongVersion);
     registry.paused = paused;
 }
 
-/// After a package upgrade, bump the registry to the new code VERSION. Admin-only.
-public entry fun migrate(_admin: &AdminCap, registry: &mut WitnessRegistry) {
+public entry fun migrate(_admin: &AdminCap, registry: &mut FinaleRegistry) {
     assert!(registry.version < VERSION, EAlreadyMigrated);
     registry.version = VERSION;
 }
 
-/// Version gate + pause switch — every player-facing entry must pass this.
-fun assert_active(registry: &WitnessRegistry) {
+fun assert_active(registry: &FinaleRegistry) {
     assert!(registry.version == VERSION, EWrongVersion);
     assert!(!registry.paused, EPaused);
 }
 
 // ---------- Mint ----------
 
-/// Mint a Validators' Witness seal for the calling player. Requires a valid
-/// authority voucher attesting Battle-3 clearance (see module header). The seal
-/// is soulbound to the caller.
-public entry fun mint_witness(
-    registry: &mut WitnessRegistry,
+/// Mint the soulbound finale badge for the calling player. Requires a valid
+/// authority voucher attesting clearance of the climax battle.
+public entry fun mint_finale(
+    registry: &mut FinaleRegistry,
     battle_id: u8,
     hero_id: u8,
     title: vector<u8>,
@@ -232,11 +197,9 @@ public entry fun mint_witness(
     clock: &Clock,
     ctx: &mut TxContext,
 ) {
-    // ---- version gate + pause switch ----
     assert_active(registry);
 
-    // ---- validate fields ----
-    assert!(battle_id == WITNESS_BATTLE_ID, EInvalidBattle);
+    assert!(battle_id == FINALE_BATTLE_ID, EInvalidBattle);
     assert!(hero_id >= 1 && hero_id <= MAX_HERO_ID, EInvalidHeroId);
     assert!(rating <= MAX_RATING, EInvalidRating);
 
@@ -262,7 +225,7 @@ public entry fun mint_witness(
     registry.total_minted = registry.total_minted + 1;
     let next_order = registry.total_minted;
 
-    let seal = WitnessSeal {
+    let badge = FinaleBadge {
         id: object::new(ctx),
         battle_id,
         hero_id,
@@ -275,24 +238,22 @@ public entry fun mint_witness(
         player,
     };
 
-    let seal_id = object::id(&seal);
+    let badge_id = object::id(&badge);
 
-    event::emit(WitnessSealMinted {
-        seal_id,
+    event::emit(FinaleBadgeMinted {
+        badge_id,
         player,
         mint_order: next_order,
         is_first: next_order == 1,
     });
 
-    // `transfer::transfer` works on objects with `key` only; this is the only
-    // way a key-only object can move. After this, no public_transfer path
-    // exists, locking the seal to `player`.
-    transfer::transfer(seal, player);
+    // key-only object: transfer::transfer is the only move; no public_transfer
+    // path exists afterward, locking the badge to `player`.
+    transfer::transfer(badge, player);
 }
 
 // ---------- Internal ----------
 
-/// Canonical voucher message — must byte-match the backend signer.
 fun build_voucher_message(
     player: address,
     battle_id: u8,
@@ -313,32 +274,28 @@ fun build_voucher_message(
 
 // ---------- Read accessors ----------
 
-public fun battle_id(s: &WitnessSeal): u8 { s.battle_id }
-public fun hero_id(s: &WitnessSeal): u8 { s.hero_id }
-public fun title(s: &WitnessSeal): &String { &s.title }
-public fun inscription(s: &WitnessSeal): &String { &s.inscription }
-public fun rating(s: &WitnessSeal): u8 { s.rating }
-public fun mint_order(s: &WitnessSeal): u64 { s.mint_order }
-public fun is_first_chronicler(s: &WitnessSeal): bool { s.is_first_chronicler }
-public fun mint_timestamp_ms(s: &WitnessSeal): u64 { s.mint_timestamp_ms }
-public fun player(s: &WitnessSeal): address { s.player }
+public fun battle_id(s: &FinaleBadge): u8 { s.battle_id }
+public fun hero_id(s: &FinaleBadge): u8 { s.hero_id }
+public fun title(s: &FinaleBadge): &String { &s.title }
+public fun inscription(s: &FinaleBadge): &String { &s.inscription }
+public fun rating(s: &FinaleBadge): u8 { s.rating }
+public fun mint_order(s: &FinaleBadge): u64 { s.mint_order }
+public fun is_first_chronicler(s: &FinaleBadge): bool { s.is_first_chronicler }
+public fun mint_timestamp_ms(s: &FinaleBadge): u64 { s.mint_timestamp_ms }
+public fun player(s: &FinaleBadge): address { s.player }
 
-public fun has_minted(registry: &WitnessRegistry, who: address): bool {
+public fun has_minted(registry: &FinaleRegistry, who: address): bool {
     table::contains(&registry.minted, who)
 }
-
-public fun total_minted(registry: &WitnessRegistry): u64 {
-    registry.total_minted
-}
-
-public fun version(registry: &WitnessRegistry): u64 { registry.version }
-public fun is_paused(registry: &WitnessRegistry): bool { registry.paused }
+public fun total_minted(registry: &FinaleRegistry): u64 { registry.total_minted }
+public fun version(registry: &FinaleRegistry): u64 { registry.version }
+public fun is_paused(registry: &FinaleRegistry): bool { registry.paused }
 
 // ---------- Test-only helpers ----------
 
 #[test_only]
 public fun init_for_testing(ctx: &mut TxContext) {
-    let registry = WitnessRegistry {
+    let registry = FinaleRegistry {
         id: object::new(ctx),
         version: VERSION,
         paused: false,
@@ -353,7 +310,7 @@ public fun init_for_testing(ctx: &mut TxContext) {
 #[test_only]
 /// Mint bypassing the voucher, to test one-per-player / order logic.
 public fun mint_for_testing(
-    registry: &mut WitnessRegistry,
+    registry: &mut FinaleRegistry,
     hero_id: u8,
     clock: &Clock,
     ctx: &mut TxContext,
@@ -363,9 +320,9 @@ public fun mint_for_testing(
     table::add(&mut registry.minted, player, true);
     registry.total_minted = registry.total_minted + 1;
     let next_order = registry.total_minted;
-    let seal = WitnessSeal {
+    let badge = FinaleBadge {
         id: object::new(ctx),
-        battle_id: WITNESS_BATTLE_ID,
+        battle_id: FINALE_BATTLE_ID,
         hero_id,
         title: string::utf8(b"t"),
         inscription: string::utf8(b""),
@@ -375,5 +332,5 @@ public fun mint_for_testing(
         mint_timestamp_ms: clock::timestamp_ms(clock),
         player,
     };
-    transfer::transfer(seal, player);
+    transfer::transfer(badge, player);
 }

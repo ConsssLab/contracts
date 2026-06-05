@@ -1,0 +1,13 @@
+[package]
+name = "event_01_gift"
+edition = "2024.beta"
+version = "1.0.0"
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/testnet" }
+# Eligibility checks Chronicle ownership, so this depends on the chronicle
+# package (sibling folder). Publish chronicle FIRST, then event_01_gift.
+chronicle = { local = "../chronicle" }
+
+[addresses]
+event_01_gift = "0x0"

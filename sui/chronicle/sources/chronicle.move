@@ -73,8 +73,10 @@ const VERSION: u64 = 1;
 
 const MAX_TITLE_LEN: u64 = 320;
 const MAX_INSCRIPTION_LEN: u64 = 200;
-const MAX_BATTLE_ID: u8 = 3;
-const MAX_HERO_ID: u8 = 20;
+// Defaults for the admin-configurable per-registry caps. Raised as new chapters
+// or heroes ship, via set_max_battle_id / set_max_hero_id — no code change needed.
+const DEFAULT_MAX_BATTLE_ID: u8 = 3;
+const DEFAULT_MAX_HERO_ID: u8 = 20;
 const MAX_BLOB_ID_LEN: u64 = 128;
 
 /// Domain-separation prefix bound into the voucher message. The off-chain signer
@@ -111,6 +113,10 @@ public struct ChronicleRegistry has key {
     version: u64,
     /// Operational kill-switch: when true, mint aborts (admin can pause).
     paused: bool,
+    /// Admin-configurable accepted ranges (defaults 3 / 20). Raised as new
+    /// chapters / heroes ship — lets the game expand with no code change.
+    max_battle_id: u8,
+    max_hero_id: u8,
     /// battle_id -> count of chronicles minted for that battle so far.
     counts: Table<u8, u64>,
     /// ed25519 public key (32 bytes) of the off-chain voucher signer. Empty
@@ -194,6 +200,8 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         id: object::new(ctx),
         version: VERSION,
         paused: false,
+        max_battle_id: DEFAULT_MAX_BATTLE_ID,
+        max_hero_id: DEFAULT_MAX_HERO_ID,
         counts: table::new<u8, u64>(ctx),
         authority_pubkey: vector::empty<u8>(),
         used_nonces: table::new<u64, bool>(ctx),
@@ -227,6 +235,23 @@ public entry fun migrate(_admin: &AdminCap, registry: &mut ChronicleRegistry) {
     registry.version = VERSION;
 }
 
+/// Raise/adjust the max battle id accepted by mint — ship new chapters with no
+/// code change. Admin-only, must stay >= 1. Widening only lets the authority
+/// voucher gate new battles (the voucher is still required), so no new trust /
+/// vulnerability is introduced.
+public entry fun set_max_battle_id(_admin: &AdminCap, registry: &mut ChronicleRegistry, value: u8) {
+    assert!(registry.version == VERSION, EWrongVersion);
+    assert!(value >= 1, EInvalidBattleId);
+    registry.max_battle_id = value;
+}
+
+/// Raise/adjust the max hero id accepted by mint. Admin-only, >= 1.
+public entry fun set_max_hero_id(_admin: &AdminCap, registry: &mut ChronicleRegistry, value: u8) {
+    assert!(registry.version == VERSION, EWrongVersion);
+    assert!(value >= 1, EInvalidHeroId);
+    registry.max_hero_id = value;
+}
+
 /// Version gate + pause switch — every player-facing entry must pass this.
 fun assert_active(registry: &ChronicleRegistry) {
     assert!(registry.version == VERSION, EWrongVersion);
@@ -256,8 +281,8 @@ public entry fun mint_chronicle(
     assert_active(registry);
 
     // ---- validate fields ----
-    assert!(battle_id >= 1 && battle_id <= MAX_BATTLE_ID, EInvalidBattleId);
-    assert!(hero_id >= 1 && hero_id <= MAX_HERO_ID, EInvalidHeroId);
+    assert!(battle_id >= 1 && battle_id <= registry.max_battle_id, EInvalidBattleId);
+    assert!(hero_id >= 1 && hero_id <= registry.max_hero_id, EInvalidHeroId);
     assert!(hp_pct <= 100, EInvalidHp);
 
     let title_len = vector::length(&title);
@@ -394,6 +419,8 @@ public fun init_for_testing(ctx: &mut TxContext) {
         id: object::new(ctx),
         version: VERSION,
         paused: false,
+        max_battle_id: DEFAULT_MAX_BATTLE_ID,
+        max_hero_id: DEFAULT_MAX_HERO_ID,
         counts: table::new<u8, u64>(ctx),
         authority_pubkey: vector::empty<u8>(),
         used_nonces: table::new<u64, bool>(ctx),
