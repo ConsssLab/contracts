@@ -185,7 +185,7 @@ fun init(otw: CHRONICLE, ctx: &mut TxContext) {
         string::utf8(b"ConsssLab"),
         string::utf8(b"{tier}"),
         string::utf8(b"{metadata_blob_id}"),
-        string::utf8(b"https://aggregator.walrus-testnet.walrus.space/v1/blobs/{metadata_blob_id}"),
+        string::utf8(b"https://aggregator.walrus-mainnet.walrus.space/v1/blobs/{metadata_blob_id}"),
     ];
 
     let mut display = display::new_with_fields<Chronicle>(&publisher, keys, values, ctx);
