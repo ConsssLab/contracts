@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Versioned pre-push hook. Activate once per clone:
+#   git config core.hooksPath scripts/githooks
+# Blocks a push if the privacy gate finds secrets / proprietary tuning.
+exec "$(git rev-parse --show-toplevel)/scripts/privacy-check.sh"
