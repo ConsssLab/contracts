@@ -1,0 +1,21 @@
+[package]
+name = "sovereign_minds"
+edition = "2024.beta"
+version = "0.1.0"
+authors = ["ConsssLab"]
+
+# Standalone package for ConSSS Wars: Sovereign Minds (群雄覺醒).
+# Deliberately NOT an upgrade of `chronicle` (Echoes of Chainoa) — see
+# README.md: its own UpgradeCap stays on a dev key during the sprint and moves
+# to the 2/3 multisig only at launch, so we can iterate fast without a multisig
+# ceremony per redeploy, and a bug here can never touch the live Echoes NFTs.
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet" }
+
+[addresses]
+sovereign_minds = "0x0"
+
+[dev-dependencies]
+
+[dev-addresses]
