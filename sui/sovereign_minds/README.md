@@ -52,15 +52,19 @@ sui client call --package <PKG> --module sovereign \
   --args <ADMIN_CAP_ID> <SOVEREIGN_REGISTRY_ID> "[<32 pubkey bytes>]"
 ```
 
-## Live IDs (fill after deploy)
+## Live IDs
 
-| Object | testnet | mainnet |
+| Object | testnet (deployed 2026-06-17) | mainnet |
 |---|---|---|
-| package | `0x…` | — |
-| `SovereignRegistry` | `0x…` | — |
-| `AdminCap` | `0x…` | — |
-| `UpgradeCap` | `0x…` (dev key) | — |
-| `Publisher` / `Display` | `0x…` | — |
+| package | `0x36cc746e0943c81853b1f7584c78328bf97a3c2a344033c21af8265db25a3374` | — |
+| `SovereignRegistry` | `0x60db6d46359cd0d5e08f5aa4e87504a5751148f3d18af5f153435f260e8b244f` | — |
+| `AdminCap` | `0xff90503c628d977c8cbca0ce730cd947c7cc570bc1100d1300a7f8f04cf194b5` | — |
+| `UpgradeCap` | `0x8d153e05bf63b6bdad9fbd043f0dc2080a8319129995390c1a89a7662e086293` (dev key) | — |
+| `Publisher` | `0x40b3b6768389499c90e02578bf201e9d46f773287e88d11e65f57e9fd19982c2` | — |
+
+Deployer/owner of the caps: `0x9550…8049` (ops). Authority pubkey
+`06e336…57dd` set via `set_authority_pubkey`. Testnet uses no multisig (caps on
+the dev key); move to multisig at mainnet.
 
 Display `image_url` templates to
 `https://conssslab.github.io/public-assets/sovereign/battle-{battle_id}-{tier}.png`
