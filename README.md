@@ -1,5 +1,7 @@
 # ConSSS Wars Contracts
 
+[![Sui Mainnet](https://img.shields.io/badge/Sui-Mainnet-4DA2FF?logo=sui&logoColor=white)](https://suiscan.xyz/mainnet)
+
 On-chain contracts for **ConSSS Wars: Echoes of Chainoa（鏈州英雄傳：鏈之迴響）**, a
 turn-based tactical RPG. Players mint a **Chronicle** NFT after each battle, a
 soulbound **Finale Badge** for clearing the climax, and a one-per-wallet
